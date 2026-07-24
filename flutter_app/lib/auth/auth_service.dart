@@ -3,8 +3,8 @@ import '../supabase/client.dart';
 
 class AuthService {
   /// Send magic link to email
-  Future<AuthResponse> signInWithMagicLink(String email) async {
-    return supabase.auth.signInWithOtp(
+  Future<void> signInWithMagicLink(String email) async {
+    await supabase.auth.signInWithOtp(
       email: email,
       shouldCreateUser: true,
     );
