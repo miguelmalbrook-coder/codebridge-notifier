@@ -48,11 +48,11 @@ jobs:
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses 2>&1
 
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew
-
-      - name: Install dependencies
-        run: flutter pub get
+      - name: Regenerate Flutter Android project files
+        run: |
+          rm -rf android
+          flutter create --project-name codebridge_notifier --org com.codebridge --platforms android .
+          flutter pub get
 
       - name: Build APK
         run: flutter build apk --release
