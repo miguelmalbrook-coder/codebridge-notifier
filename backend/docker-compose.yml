@@ -1,0 +1,27 @@
+services:
+  notifier:
+    build: .
+    container_name: codebridge-notifier
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./snapshots:/app/snapshots
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Optional — Cloudflare tunnel for remote API access
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   command: tunnel --url http://notifier:8000
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - notifier

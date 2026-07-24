@@ -1,0 +1,32 @@
+name: codebridge_notifier
+description: Codebridge Notifier — Camera monitoring alerts on your phone.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^2.6.0
+  firebase_messaging: ^15.1.0
+  firebase_core: ^3.8.0
+  flutter_local_notifications: ^18.0.0
+  http: ^1.2.0
+  intl: ^0.19.0
+  cached_network_image: ^3.4.0
+  timeago: ^3.7.0
+  provider: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+supabase:
+  # Set via --dart-define SUPABASE_URL and SUPABASE_ANON_KEY at build time
+  # No hardcoded values.

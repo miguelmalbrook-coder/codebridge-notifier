@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+*.pyc
+data/
+snapshots/
+.env
+flutter_app/.dart_tool/
+flutter_app/.packages
+flutter_app/build/
+flutter_app/.flutter-plugins*
+flutter_app/.idea/
