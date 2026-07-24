@@ -1,5 +1,6 @@
-buildToolsVersion = "36.0.0"
-minSdkVersion = 24
-compileSdkVersion = 36
-targetSdkVersion = 36
-ndkVersion = "27.0.12077973"
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
