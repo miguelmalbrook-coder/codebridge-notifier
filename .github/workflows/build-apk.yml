@@ -19,6 +19,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
     defaults:
       run:
         working-directory: ./flutter_app
@@ -43,11 +45,14 @@ jobs:
       - name: Flutter doctor
         run: flutter doctor
 
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
       - name: Install dependencies
         run: flutter pub get
 
       - name: Build APK
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
