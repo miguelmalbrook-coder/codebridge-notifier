@@ -26,7 +26,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-supabase:
-  # Set via --dart-define SUPABASE_URL and SUPABASE_ANON_KEY at build time
-  # No hardcoded values.
