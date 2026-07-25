@@ -3,6 +3,7 @@ import '../supabase/client.dart';
 import '../models/camera.dart';
 import '../auth/auth_service.dart';
 import '../widgets/camera_card.dart';
+import '../widgets/camera_edit_dialog.dart';
 import 'alert_feed_screen.dart';
 import 'login_screen.dart';
 
@@ -27,19 +28,70 @@ class _CameraListScreenState extends State<CameraListScreen> {
   Future<void> _loadCameras() async {
     setState(() => _loading = true);
     try {
-      final response = await supabase.from('cameras').select('*');
+      final response = await supabase
+          .from('cameras')
+          .select('*')
+          .order('created_at', ascending: true);
       final data = response as List<dynamic>;
       setState(() {
-        _cameras = data.map((json) => Camera.fromJson(json as Map<String, dynamic>)).toList();
+        _cameras = data
+            .map((json) => Camera.fromJson(json as Map<String, dynamic>))
+            .toList();
       });
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load cameras: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Failed to load cameras: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _addCamera() async {
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (_) => const CameraEditDialog(),
+    );
+    if (result == null || !mounted) return;
+
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You must be logged in'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      await supabase.from('cameras').insert({
+        'user_id': user.id,
+        'alias': result['alias'],
+        'rtsp_url': result['url'],
+        'status': 'offline',
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Camera added!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      _loadCameras();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add camera: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -65,7 +117,8 @@ class _CameraListScreenState extends State<CameraListScreen> {
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const AlertFeedScreen()),
+                MaterialPageRoute(
+                    builder: (_) => const AlertFeedScreen()),
               );
             },
           ),
@@ -75,6 +128,10 @@ class _CameraListScreenState extends State<CameraListScreen> {
           ),
         ],
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addCamera,
+        child: const Icon(Icons.add),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _cameras.isEmpty
@@ -82,11 +139,18 @@ class _CameraListScreenState extends State<CameraListScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.videocam_off_outlined, size: 64, color: theme.colorScheme.onSurfaceVariant),
+                      Icon(Icons.videocam_off_outlined,
+                          size: 64,
+                          color: theme.colorScheme.onSurfaceVariant),
                       const SizedBox(height: 16),
-                      Text('No cameras configured', style: theme.textTheme.titleMedium),
+                      Text('No cameras configured',
+                          style: theme.textTheme.titleMedium),
                       const SizedBox(height: 8),
-                      Text('Contact Codebridge to add your first camera.', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                      Text(
+                        'Tap + to add your first camera.',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
                     ],
                   ),
                 )
@@ -95,7 +159,10 @@ class _CameraListScreenState extends State<CameraListScreen> {
                   child: ListView.builder(
                     padding: const EdgeInsets.all(16),
                     itemCount: _cameras.length,
-                    itemBuilder: (context, index) => CameraCard(camera: _cameras[index]),
+                    itemBuilder: (context, index) => CameraCard(
+                      camera: _cameras[index],
+                      onChanged: _loadCameras,
+                    ),
                   ),
                 ),
     );

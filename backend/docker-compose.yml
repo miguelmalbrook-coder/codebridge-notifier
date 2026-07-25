@@ -4,7 +4,7 @@ services:
     container_name: codebridge-notifier
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"  # Local only — exposed via Cloudflare tunnel
     env_file:
       - .env
     volumes:
@@ -18,10 +18,13 @@ services:
               count: all
               capabilities: [gpu]
 
-  # Optional — Cloudflare tunnel for remote API access
-  # cloudflared:
-  #   image: cloudflare/cloudflared:latest
-  #   command: tunnel --url http://notifier:8000
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - notifier
+  # Cloudflare tunnel — exposes the API securely over the internet
+  # Requires TUNNEL_TOKEN env var set in .env (get from Cloudflare Zero Trust)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - notifier
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
