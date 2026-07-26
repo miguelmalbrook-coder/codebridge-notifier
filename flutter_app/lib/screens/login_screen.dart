@@ -15,32 +15,19 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _loading = false;
-  bool _useMagicLink = true;
 
-  Future<void> _submit() async {
+  Future<void> _signIn() async {
     setState(() => _loading = true);
     try {
-      if (_useMagicLink) {
-        await _auth.signInWithMagicLink(_emailCtrl.text.trim());
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Magic link sent! Check your email.'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      } else {
-        await _auth.signInWithPassword(
-          _emailCtrl.text.trim(),
-          _passwordCtrl.text,
+      await _auth.signInWithPassword(
+        _emailCtrl.text.trim(),
+        _passwordCtrl.text,
+      );
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const CameraListScreen()),
         );
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const CameraListScreen()),
-          );
-        }
       }
     } catch (e) {
       if (mounted) {
@@ -70,11 +57,16 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.camera_alt_outlined, size: 80, color: theme.colorScheme.primary),
+              Icon(Icons.camera_alt_outlined,
+                  size: 80, color: theme.colorScheme.primary),
               const SizedBox(height: 16),
-              Text('Codebridge Notifier', style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+              Text('Codebridge Notifier',
+                  style: theme.textTheme.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              Text('Real-time camera alerts', style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              Text('Real-time camera alerts',
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant)),
               const SizedBox(height: 48),
 
               TextField(
@@ -86,38 +78,44 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 keyboardType: TextInputType.emailAddress,
               ),
-              if (!_useMagicLink) ...[
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _passwordCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    prefixIcon: Icon(Icons.lock_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                  obscureText: true,
+              const SizedBox(height: 16),
+              TextField(
+                controller: _passwordCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: Icon(Icons.lock_outlined),
+                  border: OutlineInputBorder(),
                 ),
-              ],
+                obscureText: true,
+                onSubmitted: (_) => _signIn(),
+              ),
               const SizedBox(height: 24),
 
               FilledButton.icon(
-                onPressed: _loading ? null : _submit,
+                onPressed: _loading ? null : _signIn,
                 icon: _loading
-                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.login),
-                label: Text(_useMagicLink ? 'Send Magic Link' : 'Sign In'),
+                label: Text('Sign In'),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size(double.infinity, 52),
                 ),
               ),
-              const SizedBox(height: 16),
 
-              TextButton(
-                onPressed: () => setState(() => _useMagicLink = !_useMagicLink),
-                child: Text(_useMagicLink ? 'Use password instead' : 'Use magic link instead'),
+              const SizedBox(height: 24),
+              Text(
+                'Accounts are managed by your administrator.\n'
+                'Contact Codebridge for access.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant),
               ),
 
-              // Listen for auth state changes
+              // Listen for auth state changes (auto-redirect)
               StreamBuilder(
                 stream: supabase.auth.onAuthStateChange,
                 builder: (context, snapshot) {
@@ -127,7 +125,8 @@ class _LoginScreenState extends State<LoginScreen> {
                       if (mounted) {
                         Navigator.pushReplacement(
                           context,
-                          MaterialPageRoute(builder: (_) => const CameraListScreen()),
+                          MaterialPageRoute(
+                              builder: (_) => const CameraListScreen()),
                         );
                       }
                     });
