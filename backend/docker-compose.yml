@@ -3,28 +3,27 @@ services:
     build: .
     container_name: codebridge-notifier
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8000:8000"  # Local only — exposed via Cloudflare tunnel
+    network_mode: host  # Access RTSP cameras on local network
     env_file:
       - .env
     volumes:
       - ./data:/app/data
       - ./snapshots:/app/snapshots
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU passthrough (comment out if no NVIDIA GPU)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
-  # Cloudflare tunnel — exposes the API securely over the internet
-  # Requires TUNNEL_TOKEN env var set in .env (get from Cloudflare Zero Trust)
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
-    restart: unless-stopped
-    depends_on:
-      - notifier
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+  # Cloudflare tunnel (optional — uncomment to expose API)
+  # cloudflared:
+  #   image: cloudflare/cloudflared:latest
+  #   command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - notifier
+  #   environment:
+  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}

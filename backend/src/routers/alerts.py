@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from supabase import Client
 
 from src.auth import verify_token
@@ -10,6 +13,8 @@ from src.db import get_db
 from src.models import AlertList, AlertOut
 
 router = APIRouter(tags=["alerts"])
+
+SNAPSHOTS_DIR = Path("/app/snapshots")
 
 
 @router.get("/alerts", response_model=AlertList)
@@ -47,3 +52,12 @@ async def get_alert(alert_id: str, user: dict = Depends(verify_token)):
     if not result.data:
         raise HTTPException(status_code=404, detail="Alert not found")
     return result.data[0]
+
+
+@router.get("/snapshots/{camera_alias}/{filename}")
+async def get_snapshot(camera_alias: str, filename: str):
+    """Serve a detection snapshot image."""
+    snap_path = SNAPSHOTS_DIR / camera_alias / filename
+    if not snap_path.exists() or not snap_path.is_file():
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return FileResponse(str(snap_path), media_type="image/jpeg")

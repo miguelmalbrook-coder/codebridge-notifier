@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import '../config.dart';
 import '../models/alert.dart';
+import '../screens/alert_detail_screen.dart';
 
 class AlertTile extends StatelessWidget {
   final Alert alert;
@@ -12,38 +14,105 @@ class AlertTile extends StatelessWidget {
     final icon = _iconForClass(alert.className);
     final color = _colorForClass(alert.className);
 
+    // Build snapshot URL from relative path
+    final hasSnapshot = alert.snapshotUrl.isNotEmpty;
+    final fullSnapUrl =
+        hasSnapshot ? BackendConfig.snapshotUrl(alert.snapshotUrl) : null;
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: CircleAvatar(
-          backgroundColor: color.withValues(alpha: 0.15),
-          child: Icon(icon, color: color, size: 24),
-        ),
-        title: Text(
-          alert.className.toUpperCase(),
-          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 4),
-            Text('${alert.cameraId} · ${alert.confidenceLabel}', style: theme.textTheme.bodySmall),
-            Text(_formatTime(alert.seenAt), style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-          ],
-        ),
-        trailing: alert.snapshotUrl.isNotEmpty
-            ? ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  alert.snapshotUrl,
-                  width: 48,
-                  height: 48,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const Icon(Icons.image_not_supported),
+      margin: const EdgeInsets.only(bottom: 12),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: color.withValues(alpha: 0.15),
+                  child: Icon(icon, color: color, size: 22),
                 ),
-              )
-            : null,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        alert.className.toUpperCase(),
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        '${alert.cameraId} · ${alert.confidenceLabel}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  _formatTime(alert.seenAt),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+
+          // Snapshot image
+          if (fullSnapUrl != null) ...[
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AlertDetailScreen(
+                      imageUrl: fullSnapUrl,
+                      title: '${alert.className} @ ${alert.cameraId}',
+                    ),
+                  ),
+                );
+              },
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Image.network(
+                  fullSnapUrl,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  loadingBuilder: (context, child, progress) {
+                    if (progress == null) return child;
+                    return Container(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: const Center(child: CircularProgressIndicator()),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.image_not_supported,
+                                color: theme.colorScheme.onSurfaceVariant),
+                            const SizedBox(height: 4),
+                            Text('No snapshot',
+                                style: theme.textTheme.bodySmall),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }

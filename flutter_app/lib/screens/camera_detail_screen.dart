@@ -1,23 +1,55 @@
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'dart:async';
 
-/// Placeholder for live camera view.
-/// Future: Replace with MJPEG stream player or WebRTC widget.
-class CameraDetailScreen extends StatelessWidget {
+import 'package:flutter/material.dart';
+import '../config.dart';
+
+/// Camera live view with periodic snapshot refresh.
+class CameraDetailScreen extends StatefulWidget {
   final String cameraAlias;
 
   const CameraDetailScreen({super.key, required this.cameraAlias});
 
   @override
+  State<CameraDetailScreen> createState() => _CameraDetailScreenState();
+}
+
+class _CameraDetailScreenState extends State<CameraDetailScreen> {
+  /// Backend URL from shared config
+  String get _backendUrl => BackendConfig.baseUrl;
+
+  Timer? _refreshTimer;
+  int _refreshKey = 0; // Increment to force Image widget reload
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresh snapshot every 3 seconds
+    _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (mounted) {
+        setState(() => _refreshKey++);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  String get _snapshotUrl =>
+      '$_backendUrl/api/cameras/${widget.cameraAlias}/snapshot?t=$_refreshKey';
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: Text(cameraAlias)),
+      appBar: AppBar(title: Text(widget.cameraAlias)),
       body: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            // Live view placeholder
+            // Live snapshot
             Container(
               height: 300,
               width: double.infinity,
@@ -25,20 +57,31 @@ class CameraDetailScreen extends StatelessWidget {
                 color: theme.colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.live_tv_outlined, size: 64, color: theme.colorScheme.onSurfaceVariant),
-                    const SizedBox(height: 16),
-                    Text('Live View', style: theme.textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    Text('Coming soon', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                  ],
-                ),
+              clipBehavior: Clip.antiAlias,
+              child: Image.network(
+                _snapshotUrl,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Center(child: CircularProgressIndicator());
+                },
+                errorBuilder: (context, error, stackTrace) {
+                  return Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.error_outline,
+                            size: 48, color: theme.colorScheme.error),
+                        const SizedBox(height: 8),
+                        Text('Loading...',
+                            style: theme.textTheme.bodySmall),
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
             // Camera info
             Card(
@@ -49,9 +92,9 @@ class CameraDetailScreen extends StatelessWidget {
                   children: [
                     Text('Camera Info', style: theme.textTheme.titleSmall),
                     const SizedBox(height: 8),
-                    _infoRow('Name', cameraAlias),
+                    _infoRow('Name', widget.cameraAlias),
                     _infoRow('Status', 'Online'),
-                    _infoRow('Type', 'RTSP (Hikvision)'),
+                    _infoRow('Snapshot', 'Refreshes every 3s'),
                   ],
                 ),
               ),

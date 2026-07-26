@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   supabase_flutter: ^2.6.0
+  realtime_client: ^2.10.0
   firebase_messaging: ^15.1.0
   firebase_core: ^3.8.0
   flutter_local_notifications: ^18.0.0

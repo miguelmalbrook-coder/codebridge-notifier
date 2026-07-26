@@ -84,7 +84,7 @@ class CameraCard extends StatelessWidget {
       context: context,
       builder: (_) => CameraEditDialog(camera: camera),
     );
-    if (result == null || context.mounted) return;
+    if (result == null || !context.mounted) return;
 
     try {
       await supabase

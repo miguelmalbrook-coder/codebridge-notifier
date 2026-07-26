@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
-import 'screens/camera_list_screen.dart';
 import 'supabase/client.dart';
 
 class NotifierApp extends StatelessWidget {
@@ -32,7 +32,7 @@ class _AuthGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final session = supabase.auth.currentSession;
     if (session != null && session.accessToken.isNotEmpty) {
-      return const CameraListScreen();
+      return const HomeScreen();
     }
     return const LoginScreen();
   }

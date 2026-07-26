@@ -1,11 +1,8 @@
 import 'package:flutter/material.dart';
 import '../supabase/client.dart';
 import '../models/camera.dart';
-import '../auth/auth_service.dart';
 import '../widgets/camera_card.dart';
 import '../widgets/camera_edit_dialog.dart';
-import 'alert_feed_screen.dart';
-import 'login_screen.dart';
 
 class CameraListScreen extends StatefulWidget {
   const CameraListScreen({super.key});
@@ -15,7 +12,6 @@ class CameraListScreen extends StatefulWidget {
 }
 
 class _CameraListScreenState extends State<CameraListScreen> {
-  final _auth = AuthService();
   List<Camera> _cameras = [];
   bool _loading = true;
 
@@ -95,38 +91,12 @@ class _CameraListScreenState extends State<CameraListScreen> {
     }
   }
 
-  Future<void> _signOut() async {
-    await _auth.signOut();
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Codebridge Notifier'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_outlined),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const AlertFeedScreen()),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _signOut,
-          ),
-        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addCamera,
