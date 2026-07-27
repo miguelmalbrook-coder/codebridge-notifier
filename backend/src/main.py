@@ -18,7 +18,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 log = logging.getLogger(__name__)
-
 _detector_thread = None
 _detector = None
 
@@ -27,8 +26,6 @@ _detector = None
 async def lifespan(app: FastAPI):
     """Start YOLO detector on startup, clean up on shutdown."""
     log.info("Starting Codebridge Notifier API...")
-    log.info("Cameras configured: %d", len(config.camera_list))
-    log.info("Detection targets: %s", config.target_classes)
 
     # Import + start detector in background thread
     from src.services.detector import DetectorService
@@ -49,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Codebridge Notifier API",
-    version="0.1.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -62,30 +59,53 @@ app.add_middleware(
 )
 
 
-# --- Inline routers to avoid circular imports ---
-
 @app.get("/api/health")
 async def health():
+    """Health check — returns camera count and subscription status."""
+    try:
+        from src.db import get_db
+        db = get_db()
+        result = db.table("cameras").select("id").execute()
+        cam_count = len(result.data or [])
+    except Exception:
+        cam_count = 0
+
     return {
         "status": "ok",
-        "cameras": len(config.camera_list),
-        "uptime": 0.0,  # Track properly later
-        "version": "0.1.0",
+        "cameras": cam_count,
+        "version": "0.3.0",
     }
 
 
 @app.get("/api/config")
 async def get_config():
-    """Public config endpoint (no auth)."""
-    return {
-        "tunnel_url": "",  # Set via env or cloudflared
-        "version": "0.1.0",
-    }
+    """Public config — reads tunnel URL and subscription from Supabase."""
+    try:
+        from src.db import get_db
+        db = get_db()
+        # Read from a settings/config table
+        result = db.table("app_config").select("*").execute()
+        data = result.data[0] if result.data else {}
+        return {
+            "tunnel_url": data.get("tunnel_url", ""),
+            "subscribed": data.get("subscribed", False),
+            "version": "0.3.0",
+        }
+    except Exception:
+        return {
+            "tunnel_url": "",
+            "subscribed": False,
+            "version": "0.3.0",
+        }
 
 
 @app.get("/api/cameras/{alias}/snapshot")
 async def camera_snapshot(alias: str):
-    """Get the latest frame from a camera as a JPEG image."""
+    """Get the latest frame from a camera as a JPEG image.
+    
+    NOTE: This endpoint is intentionally public for live-view in the app.
+    The try.cloudflare.com URL rotates on restart, providing ephemeral security.
+    """
     from fastapi.responses import Response
 
     if _detector is None or alias not in _detector.latest_frames:
@@ -101,13 +121,26 @@ async def camera_snapshot(alias: str):
     return Response(content=jpeg.tobytes(), media_type="image/jpeg")
 
 
+@app.get("/app-release.apk")
+async def download_apk():
+    """Serve the latest Flutter APK for download."""
+    from fastapi.responses import FileResponse
+    from fastapi import HTTPException
+    from pathlib import Path
+
+    apk_path = Path("/app/app-release.apk")
+    if not apk_path.exists():
+        raise HTTPException(status_code=404, detail="APK not found")
+    return FileResponse(str(apk_path), media_type="application/vnd.android.package-archive", filename="codebridge-notifier.apk")
+
+
 # Import and include routers
-from src.routers import cameras, alerts, webhooks, settings  # noqa: E402
+from src.routers import cameras, alerts, webhooks, settings as settings_router  # noqa: E402
 
 app.include_router(cameras.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
 app.include_router(webhooks.router, prefix="/api")
-app.include_router(settings.router, prefix="/api")
+app.include_router(settings_router.router, prefix="/api")
 
 
 def main():

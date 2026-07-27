@@ -9,21 +9,58 @@ services:
     volumes:
       - ./data:/app/data
       - ./snapshots:/app/snapshots
-    # GPU passthrough (comment out if no NVIDIA GPU)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+      - ./app-release.apk:/app/app-release.apk
 
-  # Cloudflare tunnel (optional — uncomment to expose API)
-  # cloudflared:
-  #   image: cloudflare/cloudflared:latest
-  #   command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
-  #   restart: unless-stopped
-  #   depends_on:
-  #     - notifier
-  #   environment:
-  #     - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: codebridge-ntfy
+    restart: unless-stopped
+    command: serve
+    ports:
+      - "8090:80"
+    volumes:
+      - ./ntfy-cache:/var/cache/ntfy
+      - ./ntfy-etc:/etc/ntfy
+    environment:
+      - NTFY_BASE_URL=http://192.168.100.20:8090
+      - NTFY_CACHE_FILE=/var/cache/ntfy/cache.db
+      - NTFY_BEHIND_PROXY=true
+
+  # Cloudflare quick tunnel — URL auto-updated in Supabase by tunnel-watchdog
+  cloudflared-api:
+    image: cloudflare/cloudflared:latest
+    container_name: codebridge-cloudflared-api
+    restart: unless-stopped
+    command: tunnel --url http://host.docker.internal:8001
+    depends_on:
+      - notifier
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Cloudflare quick tunnel — exposes ntfy on port 8090 over the internet
+  cloudflared-ntfy:
+    image: cloudflare/cloudflared:latest
+    container_name: codebridge-cloudflared-ntfy
+    restart: unless-stopped
+    command: tunnel --url http://host.docker.internal:8090
+    depends_on:
+      - ntfy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Tunnel watchdog — auto-updates tunnel URLs in Supabase app_config
+  tunnel-watchdog:
+    build:
+      dockerfile: Dockerfile.watchdog
+    container_name: codebridge-watchdog
+    restart: unless-stopped
+    depends_on:
+      - cloudflared-api
+      - cloudflared-ntfy
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - API_TUNNEL_NAME=codebridge-cloudflared-api
+      - NTFY_TUNNEL_NAME=codebridge-cloudflared-ntfy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro

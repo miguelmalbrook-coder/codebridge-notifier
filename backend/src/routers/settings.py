@@ -1,4 +1,4 @@
-"""Runtime settings endpoint — change model, mode, etc. without restart."""
+"""Runtime settings endpoint — change model, mode, targets, etc. without restart."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from src.services.runtime_settings import get_runtime_settings
 router = APIRouter(tags=["settings"])
 
 AVAILABLE_MODELS = [
-    "yolo11n.pt",   # Nano — fastest, least accurate
-    "yolo11s.pt",   # Small — good balance (default)
-    "yolo11m.pt",   # Medium
-    "yolo11l.pt",   # Large
-    "yolo11x.pt",   # X-Large — slowest, most accurate
+    "yolo11n.pt",
+    "yolo11s.pt",
+    "yolo11m.pt",
+    "yolo11l.pt",
+    "yolo11x.pt",
 ]
 
 
@@ -58,6 +58,12 @@ async def update_settings(body: dict, user: dict = Depends(verify_token)):
     if "cooldown" in body:
         try:
             s.cooldown = body["cooldown"]
+        except ValueError as e:
+            errors.append(str(e))
+
+    if "targets" in body:
+        try:
+            s.targets = body["targets"]
         except ValueError as e:
             errors.append(str(e))
 

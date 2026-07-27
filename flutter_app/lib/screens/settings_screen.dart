@@ -16,94 +16,69 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _auth = AuthService();
-
-  String _mode = 'yolo';
-  String _model = 'yolo11s.pt';
-  double _confidence = 0.4;
-  int _cooldown = 15;
+  List<Map<String, dynamic>> _cameras = [];
   List<String> _availableModels = [];
+  List<String> _availableTargets = [];
   bool _loading = true;
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
-    _loadSettings();
+    _loadAll();
   }
 
-  Future<void> _loadSettings() async {
+  Future<void> _loadAll() async {
     setState(() => _loading = true);
+    await Future.wait([_loadMeta(), _loadCameras()]);
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _loadMeta() async {
     try {
-      final res = await http.get(
-        Uri.parse('${BackendConfig.baseUrl}/api/settings'),
-      );
+      final res = await http.get(Uri.parse('${BackendConfig.baseUrl}/api/settings'));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         setState(() {
-          _mode = data['mode'] as String? ?? 'yolo';
-          _model = data['model'] as String? ?? 'yolo11s.pt';
-          _confidence = (data['confidence'] as num?)?.toDouble() ?? 0.4;
-          _cooldown = (data['cooldown'] as num?)?.toInt() ?? 15;
-          _availableModels = (data['available_models'] as List<dynamic>?)
-                  ?.cast<String>() ??
-              [];
+          _availableModels = (data['available_models'] as List<dynamic>?)?.cast<String>() ?? [];
+          _availableTargets = (data['available_targets'] as List<dynamic>?)?.cast<String>() ?? [];
         });
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Failed to load settings: $e'),
-              backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      debugPrint('Failed to load meta: $e');
     }
   }
 
-  Future<void> _saveSettings() async {
-    setState(() => _saving = true);
+  Future<void> _loadCameras() async {
     try {
-      final session = supabase.auth.currentSession;
-      if (session == null) return;
+      final response = await supabase
+          .from('cameras')
+          .select('id, alias, detection_mode, model, confidence, cooldown_seconds, targets, motion_sensitivity')
+          .order('created_at');
+      setState(() {
+        _cameras = (response as List<dynamic>).cast<Map<String, dynamic>>();
+      });
+    } catch (e) {
+      debugPrint('Failed to load cameras: $e');
+    }
+  }
 
-      final res = await http.put(
-        Uri.parse('${BackendConfig.baseUrl}/api/settings'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${session.accessToken}',
-          'apikey': session.accessToken,
-        },
-        body: jsonEncode({
-          'mode': _mode,
-          'model': _model,
-          'confidence': _confidence,
-          'cooldown': _cooldown,
-        }),
-      );
-
-      if (res.statusCode == 200) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-                content: Text('Settings saved'),
-                backgroundColor: Colors.green),
-          );
-        }
-      } else {
-        throw Exception(res.body);
+  Future<void> _saveCameraSetting(String cameraId, String field, dynamic value) async {
+    try {
+      await supabase.from('cameras').update({field: value}).eq('id', cameraId);
+      final idx = _cameras.indexWhere((c) => c['id'] == cameraId);
+      if (idx != -1) setState(() => _cameras[idx][field] = value);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Saved'), backgroundColor: Colors.green, duration: Duration(seconds: 1)),
+        );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Failed to save: $e'),
-              backgroundColor: Colors.red),
+          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
         );
       }
-    } finally {
-      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -118,209 +93,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // Detection Mode
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Detection Mode',
-                            style: theme.textTheme.titleSmall),
-                        const SizedBox(height: 8),
-                        SegmentedButton<String>(
-                          segments: const [
-                            ButtonSegment(
-                                value: 'yolo', label: Text('YOLO')),
-                            ButtonSegment(
-                                value: 'motion', label: Text('Motion')),
-                          ],
-                          selected: {_mode},
-                          onSelectionChanged: (v) {
-                            setState(() => _mode = v.first);
-                          },
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _mode == 'yolo'
-                              ? 'Pure YOLO on every frame (more CPU)'
-                              : 'Motion detection gates YOLO (saves CPU)',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
+                // Per-Camera Settings
+                Row(
+                  children: [
+                    Icon(Icons.videocam, color: theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Text('Per-Camera Settings', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                  ],
                 ),
+                const SizedBox(height: 4),
+                Text('Configure each camera independently',
+                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                 const SizedBox(height: 12),
-
-                // YOLO Model
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('YOLO Model',
-                            style: theme.textTheme.titleSmall),
-                        const SizedBox(height: 8),
-                        DropdownButtonFormField<String>(
-                          value: _availableModels.contains(_model)
-                              ? _model
-                              : _availableModels.isNotEmpty
-                                  ? _availableModels.first
-                                  : null,
-                          items: _availableModels
-                              .map((m) => DropdownMenuItem(
-                                    value: m,
-                                    child: Text(m),
-                                  ))
-                              .toList(),
-                          onChanged: (v) {
-                            if (v != null) {
-                              setState(() => _model = v);
-                            }
-                          },
-                          decoration: const InputDecoration(
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 12),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Applies after next camera refresh (~30s)',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Confidence threshold
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Confidence Threshold',
-                            style: theme.textTheme.titleSmall),
-                        const SizedBox(height: 8),
-                        Row(
+                if (_cameras.isEmpty)
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Center(
+                        child: Column(
                           children: [
-                            Expanded(
-                              child: Slider(
-                                value: _confidence,
-                                min: 0.05,
-                                max: 0.95,
-                                divisions: 18,
-                                label: '${(_confidence * 100).round()}%',
-                                onChanged: (v) {
-                                  setState(() => _confidence = v);
-                                },
-                              ),
-                            ),
-                            SizedBox(
-                              width: 48,
-                              child: Text(
-                                '${(_confidence * 100).round()}%',
-                                textAlign: TextAlign.right,
-                                style: theme.textTheme.titleSmall,
-                              ),
-                            ),
+                            Icon(Icons.videocam_off, size: 48, color: theme.colorScheme.onSurfaceVariant),
+                            const SizedBox(height: 12),
+                            Text('No cameras found', style: theme.textTheme.titleSmall),
+                            const SizedBox(height: 4),
+                            Text('Add a camera in the Cameras tab first.',
+                                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                           ],
                         ),
-                        Text(
-                          'Lower = more detections (more false alarms)',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Cooldown
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Alert Cooldown',
-                            style: theme.textTheme.titleSmall),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Slider(
-                                value: _cooldown.toDouble(),
-                                min: 1,
-                                max: 120,
-                                divisions: 119,
-                                label: '${_cooldown}s',
-                                onChanged: (v) {
-                                  setState(() => _cooldown = v.round());
-                                },
-                              ),
-                            ),
-                            SizedBox(
-                              width: 48,
-                              child: Text(
-                                '${_cooldown}s',
-                                textAlign: TextAlign.right,
-                                style: theme.textTheme.titleSmall,
-                              ),
-                            ),
-                          ],
-                        ),
-                        Text(
-                          'Min seconds between same-class alerts',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // Save button
-                FilledButton.icon(
-                  onPressed: _saving ? null : _saveSettings,
-                  icon: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.save),
-                  label: const Text('Save Settings'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 48),
-                  ),
-                ),
+                  )
+                else
+                  ..._cameras.map((cam) => _cameraCard(cam, theme)),
                 const SizedBox(height: 24),
 
-                // Connection info
+                // Connection
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Connection',
-                            style: theme.textTheme.titleSmall),
+                        Text('Connection', style: theme.textTheme.titleSmall),
                         const SizedBox(height: 8),
                         _row('Backend', BackendConfig.baseUrl),
                         const SizedBox(height: 4),
-                        _row('User',
-                            _auth.currentUser?.email ?? 'unknown'),
+                        _row('User', _auth.currentUser?.email ?? 'unknown'),
                       ],
                     ),
                   ),
@@ -335,27 +153,147 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onTap: () async {
                       await _auth.signOut();
                       if (context.mounted) {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const LoginScreen()),
-                        );
+                        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
                       }
                     },
                   ),
                 ),
                 const SizedBox(height: 32),
-
-                // Version
                 Center(
-                  child: Text(
-                    'Codebridge Notifier v0.2.0',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant),
-                  ),
+                  child: Text('Codebridge Notifier v0.5.0', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                 ),
               ],
             ),
+    );
+  }
+
+  Widget _cameraCard(Map<String, dynamic> cam, ThemeData theme) {
+    final mode = cam['detection_mode'] as String? ?? 'yolo';
+    final model = cam['model'] as String? ?? 'yolo11s.pt';
+    final conf = (cam['confidence'] as num?)?.toDouble() ?? 0.4;
+    final cooldown = (cam['cooldown_seconds'] as num?)?.toInt() ?? 15;
+    final targets = (cam['targets'] as List<dynamic>?)?.cast<String>() ?? ['person', 'car', 'cat', 'dog'];
+    final motionSensitivity = (cam['motion_sensitivity'] as num?)?.toDouble() ?? 0.001;
+    final camId = cam['id'] as String;
+    final alias = cam['alias'] as String? ?? 'Unknown';
+    final displayConf = (conf * 100).toStringAsFixed(0);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: ExpansionTile(
+        leading: Icon(
+          mode == 'yolo' ? Icons.smart_toy : Icons.motion_photos_on,
+          color: theme.colorScheme.primary,
+        ),
+        title: Text(alias, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text('$mode · ${displayConf}% · ${targets.join(", ")}',
+            style: theme.textTheme.bodySmall),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Mode
+                _label('Detection Mode', theme),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'yolo', label: Text('YOLO')),
+                    ButtonSegment(value: 'motion', label: Text('Motion')),
+                  ],
+                  selected: {mode},
+                  onSelectionChanged: (v) => _saveCameraSetting(camId, 'detection_mode', v.first),
+                ),
+                const SizedBox(height: 16),
+
+                // Model
+                _label('YOLO Model', theme),
+                DropdownButtonFormField<String>(
+                  value: _availableModels.contains(model) ? model : _availableModels.firstOrNull,
+                  items: _availableModels.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+                  onChanged: (v) { if (v != null) _saveCameraSetting(camId, 'model', v); },
+                  decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+                ),
+                const SizedBox(height: 16),
+
+                // Confidence
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _label('Confidence', theme),
+                    Text('${(conf * 100).round()}%', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                Slider(
+                  value: conf, min: 0.05, max: 0.95, divisions: 18,
+                  onChanged: (v) => _saveCameraSetting(camId, 'confidence', double.parse(v.toStringAsFixed(2))),
+                ),
+
+                // Cooldown
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _label('Cooldown', theme),
+                    Text('${cooldown}s', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                Slider(
+                  value: cooldown.toDouble(), min: 1, max: 120, divisions: 119,
+                  onChanged: (v) => _saveCameraSetting(camId, 'cooldown_seconds', v.round()),
+                ),
+
+                // Motion sensitivity (only relevant in motion mode)
+                if (mode == 'motion') ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _label('Motion Sensitivity', theme),
+                      Text('${(motionSensitivity * 100).toStringAsFixed(2)}%', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  Slider(
+                    value: motionSensitivity, min: 0.0001, max: 0.01, divisions: 99,
+                    onChanged: (v) => _saveCameraSetting(camId, 'motion_sensitivity', double.parse(v.toStringAsFixed(4))),
+                  ),
+                  Text('Lower = more sensitive', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  const SizedBox(height: 8),
+                ],
+
+                // Targets
+                const SizedBox(height: 8),
+                _label('Detection Targets', theme),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 0,
+                  children: _availableTargets.map((t) {
+                    final selected = targets.contains(t);
+                    return FilterChip(
+                      label: Text(t),
+                      selected: selected,
+                      onSelected: (sel) {
+                        final updated = List<String>.from(targets);
+                        if (sel) updated.add(t); else updated.remove(t);
+                        _saveCameraSetting(camId, 'targets', updated);
+                      },
+                      selectedColor: theme.colorScheme.primaryContainer,
+                      visualDensity: VisualDensity.compact,
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _label(String text, ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(text, style: theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600)),
     );
   }
 
@@ -364,11 +302,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
-        Flexible(
-          child: Text(value,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13)),
-        ),
+        Flexible(child: Text(value, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13))),
       ],
     );
   }

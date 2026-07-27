@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'services/app_config_service.dart';
 import 'supabase/client.dart';
 
 class NotifierApp extends StatelessWidget {
@@ -22,7 +23,9 @@ class NotifierApp extends StatelessWidget {
         brightness: Brightness.dark,
       ),
       themeMode: ThemeMode.system,
-      home: _AuthGate(),
+      home: SubscriptionGate(
+        child: _AuthGate(),
+      ),
     );
   }
 }

@@ -14,12 +14,18 @@ class AlertFeedScreen extends StatefulWidget {
 }
 
 class _AlertFeedScreenState extends State<AlertFeedScreen> {
-  List<Alert> _alerts = [];
+  List<Alert> _allAlerts = [];
   bool _loading = true;
   int _page = 1;
   bool _hasMore = true;
   final _scrollCtrl = ScrollController();
-  var _channel;
+  dynamic _channel;
+
+  // Filters
+  String? _filterCamera;
+  String? _filterClass;
+  List<String> _cameraOptions = [];
+  List<String> _classOptions = ['person', 'car', 'cat', 'dog', 'motorcycle', 'truck', 'bus', 'bicycle'];
 
   @override
   void initState() {
@@ -30,7 +36,6 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
   }
 
   void _subscribeRealtime() {
-    // Listen for new alerts via Supabase Realtime
     _channel = supabase
         .channel('alerts-feed')
         .onPostgresChanges(
@@ -42,12 +47,24 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
                 payload.newRecord as Map<String, dynamic>);
             if (mounted) {
               setState(() {
-                _alerts.insert(0, newAlert);
+                _allAlerts.insert(0, newAlert);
+                // Extract camera options dynamically
+                if (!_cameraOptions.contains(newAlert.cameraId)) {
+                  _cameraOptions.add(newAlert.cameraId);
+                }
               });
             }
           },
         )
         .subscribe();
+  }
+
+  List<Alert> get _filteredAlerts {
+    return _allAlerts.where((a) {
+      if (_filterCamera != null && a.cameraId != _filterCamera) return false;
+      if (_filterClass != null && a.className != _filterClass) return false;
+      return true;
+    }).toList();
   }
 
   Future<void> _loadAlerts() async {
@@ -65,8 +82,14 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
       final parsed =
           data.map((json) => Alert.fromJson(json as Map<String, dynamic>)).toList();
 
+      // Extract camera options
+      final cameras = parsed.map((a) => a.cameraId).toSet();
+      for (final c in cameras) {
+        if (!_cameraOptions.contains(c)) _cameraOptions.add(c);
+      }
+
       setState(() {
-        _alerts.addAll(parsed);
+        _allAlerts.addAll(parsed);
         _hasMore = parsed.length == 20;
         _page++;
         _loading = false;
@@ -100,9 +123,11 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final filtered = _filteredAlerts;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Alert History'),
+        title: const Text('Alerts'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -110,61 +135,168 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
               setState(() {
                 _page = 1;
                 _hasMore = true;
-                _alerts = [];
+                _allAlerts = [];
               });
               _loadAlerts();
             },
           ),
         ],
       ),
-      body: _alerts.isEmpty && _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _alerts.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.check_circle_outline,
-                          size: 64, color: theme.colorScheme.primary),
-                      const SizedBox(height: 16),
-                      Text('All clear',
-                          style: theme.textTheme.titleMedium),
-                      const SizedBox(height: 8),
-                      Text(
-                        'When something is detected, alerts appear here instantly.',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant),
+      body: Column(
+        children: [
+          // ── Filter bar ──
+          if (_cameraOptions.isNotEmpty || _allAlerts.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Camera filter chips
+                  if (_cameraOptions.isNotEmpty) ...[
+                    Text('Camera', style: theme.textTheme.labelSmall),
+                    const SizedBox(height: 4),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          _filterChip('All', _filterCamera == null, () {
+                            setState(() => _filterCamera = null);
+                          }),
+                          ..._cameraOptions.map((cam) => _filterChip(
+                                cam,
+                                _filterCamera == cam,
+                                () => setState(() => _filterCamera = cam),
+                              )),
+                        ],
                       ),
-                    ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  // Class filter chips
+                  Text('Class', style: theme.textTheme.labelSmall),
+                  const SizedBox(height: 4),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _filterChip('All', _filterClass == null, () {
+                          setState(() => _filterClass = null);
+                        }),
+                        ..._classOptions.map((cls) => _filterChip(
+                              cls,
+                              _filterClass == cls,
+                              () => setState(() => _filterClass = cls),
+                            )),
+                      ],
+                    ),
                   ),
-                )
-              : RefreshIndicator(
-                  onRefresh: () async {
-                    setState(() {
-                      _page = 1;
-                      _hasMore = true;
-                      _alerts = [];
-                    });
-                    await _loadAlerts();
-                  },
-                  child: ListView.builder(
-                    controller: _scrollCtrl,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _alerts.length + (_hasMore ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == _alerts.length) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(16),
-                            child: CircularProgressIndicator(),
+                  // Active filter indicator
+                  if (_filterCamera != null || _filterClass != null) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text(
+                          '${filtered.length} of ${_allAlerts.length} alerts',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.primary),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => setState(() {
+                            _filterCamera = null;
+                            _filterClass = null;
+                          }),
+                          child: Text(
+                            'Clear filters',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.error),
                           ),
-                        );
-                      }
-                      return AlertTile(alert: _alerts[index]);
-                    },
-                  ),
-                ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          if (_cameraOptions.isNotEmpty || _allAlerts.isNotEmpty)
+            const Divider(height: 1),
+
+          // ── Alert list ──
+          Expanded(
+            child: _allAlerts.isEmpty && _loading
+                ? const Center(child: CircularProgressIndicator())
+                : filtered.isEmpty && !_loading
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.filter_list_off,
+                                size: 48,
+                                color: theme.colorScheme.onSurfaceVariant),
+                            const SizedBox(height: 12),
+                            Text(
+                              _allAlerts.isEmpty
+                                  ? 'All clear'
+                                  : 'No alerts match filters',
+                              style: theme.textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _allAlerts.isEmpty
+                                  ? 'When something is detected, alerts appear here instantly.'
+                                  : 'Try changing your filter selection.',
+                              textAlign: TextAlign.center,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: () async {
+                          setState(() {
+                            _page = 1;
+                            _hasMore = true;
+                            _allAlerts = [];
+                          });
+                          await _loadAlerts();
+                        },
+                        child: ListView.builder(
+                          controller: _scrollCtrl,
+                          padding: const EdgeInsets.all(16),
+                          itemCount: filtered.length + (_hasMore ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            if (index == filtered.length) {
+                              return const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: CircularProgressIndicator(),
+                                ),
+                              );
+                            }
+                            return AlertTile(alert: filtered[index]);
+                          },
+                        ),
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterChip(String label, bool selected, VoidCallback onTap) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: FilterChip(
+        label: Text(label),
+        selected: selected,
+        onSelected: (_) => onTap(),
+        selectedColor: theme.colorScheme.primaryContainer,
+        showCheckmark: false,
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
     );
   }
 }

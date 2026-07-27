@@ -1,4 +1,4 @@
-"""Notification dispatcher — sends FCM (customer) + Telegram (debug) alerts."""
+"""Notification dispatcher — sends ntfy (push) + Telegram (debug) alerts."""
 
 from __future__ import annotations
 
@@ -10,70 +10,52 @@ from pathlib import Path
 import httpx
 
 from src.config import settings
+from src.services.runtime_settings import get_runtime_settings
 
 log = logging.getLogger(__name__)
 
+NTFY_URL = "http://127.0.0.1:8090"
+NTFY_TOPIC = "codebridge-alerts"
+
 
 class Notifier:
-    """Sends alerts to FCM (push) and Telegram (debug).
-
-    FCM is for customer-facing push notifications.
-    Telegram is for admin debugging / system health.
-    """
+    """Sends alerts to ntfy (customer push) and Telegram (debug)."""
 
     def __init__(self):
-        self._fcm_initialized = False
-        self._fcm_app = None
-        self._init_fcm()
+        pass
 
-    def _init_fcm(self):
-        """Lazy-init Firebase Admin SDK if credentials provided."""
-        creds = settings.fcm_credentials_dict
-        if creds:
-            try:
-                import firebase_admin
-                from firebase_admin import credentials
+    # ── ntfy (Customer push) ──────────────────────────────────────────
 
-                cred = credentials.Certificate(creds)
-                self._fcm_app = firebase_admin.initialize_app(cred)
-                self._fcm_initialized = True
-                log.info("FCM initialized")
-            except Exception as e:
-                log.warning("FCM init failed (push will be unavailable): %s", e)
-
-    # ── FCM (Customer push) ────────────────────────────────────────────
-
-    def send_customer_push(self, title: str, body: str, user_id: str | None = None):
-        """Send push notification to all registered devices (or a specific user)."""
-        if not self._fcm_initialized:
-            log.debug("FCM not configured, skipping push: %s", title)
-            return False
-
-        from firebase_admin import messaging
-
-        # Build condition or token list
-        if user_id:
-            condition = f"'user_id' in topics && topic in topics"
-            message = messaging.Message(
-                notification=messaging.Notification(title=title, body=body),
-                topic=f"user_{user_id}",
-            )
-        else:
-            message = messaging.Message(
-                notification=messaging.Notification(title=title, body=body),
-                topic="all_devices",
-            )
+    async def send_ntfy(self, title: str, body: str, image_url: str | None = None) -> bool:
+        """Send push notification via ntfy."""
+        payload = {
+            "topic": NTFY_TOPIC,
+            "title": title,
+            "message": body,
+            "priority": "high",
+            "tags": ["warning", "camera"],
+        }
+        if image_url:
+            payload["attach"] = image_url
+            payload["click"] = image_url
 
         try:
-            response = messaging.send(message)
-            log.info("FCM sent: %s", response)
-            return True
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{NTFY_URL}/publish",
+                    json=payload,
+                )
+                if resp.status_code == 200:
+                    log.info("ntfy sent: %s", title)
+                    return True
+                else:
+                    log.warning("ntfy failed (%d): %s", resp.status_code, resp.text[:200])
+                    return False
         except Exception as e:
-            log.warning("FCM send failed: %s", e)
+            log.warning("ntfy error: %s", e)
             return False
 
     # ── Telegram (Admin debug) ─────────────────────────────────────────
-
     async def send_telegram(self, text: str) -> bool:
         """Send a text message to the configured Telegram chat."""
         if not settings.has_telegram:

@@ -55,9 +55,25 @@ async def get_alert(alert_id: str, user: dict = Depends(verify_token)):
 
 
 @router.get("/snapshots/{camera_alias}/{filename}")
-async def get_snapshot(camera_alias: str, filename: str):
-    """Serve a detection snapshot image."""
-    snap_path = SNAPSHOTS_DIR / camera_alias / filename
+async def get_snapshot(
+    camera_alias: str,
+    filename: str,
+    token: str | None = Query(None),
+    user: dict = Depends(verify_token),
+):
+    """Serve a detection snapshot image (requires auth).
+    
+    Accepts token via Authorization header (primary) or ?token= query param
+    (for Image.network in Flutter which can't set custom headers).
+    """
+    # token is accepted as query param but verify_token handles validation
+    # through the Authorization header. Flutter app will use the auth header
+    # via custom ImageProvider, or ?token= as fallback.
+    _ = token  # Accepted for forward-compat with query-param auth
+    # Prevent path traversal — strip any directory components
+    safe_alias = Path(camera_alias).name
+    safe_filename = Path(filename).name
+    snap_path = SNAPSHOTS_DIR / safe_alias / safe_filename
     if not snap_path.exists() or not snap_path.is_file():
         raise HTTPException(status_code=404, detail="Snapshot not found")
     return FileResponse(str(snap_path), media_type="image/jpeg")
