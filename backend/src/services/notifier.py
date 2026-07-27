@@ -1,4 +1,6 @@
-"""Notification dispatcher — sends ntfy (push) + Telegram (debug) alerts."""
+"""Notification dispatcher — sends ntfy (push) + Telegram (debug) alerts.
+Synchronous methods because the detector runs in a background thread.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ class Notifier:
 
     # ── ntfy (Customer push) ──────────────────────────────────────────
 
-    async def send_ntfy(self, title: str, body: str, image_url: str | None = None) -> bool:
+    def send_ntfy(self, title: str, body: str, image_url: str | None = None) -> bool:
         """Send push notification via ntfy."""
         payload = {
             "topic": NTFY_TOPIC,
@@ -40,8 +42,8 @@ class Notifier:
             payload["click"] = image_url
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(
                     f"{NTFY_URL}/publish",
                     json=payload,
                 )
@@ -56,7 +58,7 @@ class Notifier:
             return False
 
     # ── Telegram (Admin debug) ─────────────────────────────────────────
-    async def send_telegram(self, text: str) -> bool:
+    def send_telegram(self, text: str) -> bool:
         """Send a text message to the configured Telegram chat."""
         if not settings.has_telegram:
             return False
@@ -71,9 +73,9 @@ class Notifier:
             "parse_mode": "HTML",
         }
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        with httpx.Client(timeout=10) as client:
             try:
-                resp = await client.post(url, json=payload)
+                resp = client.post(url, json=payload)
                 if resp.status_code != 200:
                     log.warning("Telegram send failed: %s", resp.text)
                     return False
@@ -82,7 +84,7 @@ class Notifier:
                 log.warning("Telegram error: %s", e)
                 return False
 
-    async def send_telegram_photo(self, photo_path: str | Path, caption: str = "") -> bool:
+    def send_telegram_photo(self, photo_path: str | Path, caption: str = "") -> bool:
         """Send a photo with caption to Telegram."""
         if not settings.has_telegram:
             return False
@@ -92,7 +94,7 @@ class Notifier:
             f"/sendPhoto"
         )
 
-        async with httpx.AsyncClient(timeout=30) as client:
+        with httpx.Client(timeout=30) as client:
             try:
                 with open(photo_path, "rb") as f:
                     files = {"photo": f}
@@ -100,7 +102,7 @@ class Notifier:
                         "chat_id": settings.telegram_chat_id,
                         "caption": caption[:1024],
                     }
-                    resp = await client.post(url, data=data, files=files)
+                    resp = client.post(url, data=data, files=files)
                     return resp.status_code == 200
             except Exception as e:
                 log.warning("Telegram photo error: %s", e)

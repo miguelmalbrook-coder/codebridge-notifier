@@ -251,6 +251,15 @@ class DetectorService:
                 # Run detection with per-camera confidence
                 try:
                     results = model(frame, conf=cam.confidence, verbose=False)
+                    total = len(results[0].boxes) if results[0].boxes else 0
+                    target_matches = 0
+                    if total > 0:
+                        for box in results[0].boxes:
+                            cls = results[0].names[int(box.cls[0])].lower()
+                            if cls in set(cam.targets):
+                                target_matches += 1
+                        if target_matches > 0:
+                            log.info("Frame %s: %d target(s) found", cam.alias, target_matches)
                     self._process_results(cam, results, frame)
                 except Exception as e:
                     log.error("Detection error on %s: %s", cam.alias, e)
@@ -260,17 +269,19 @@ class DetectorService:
         log.info("Detector thread stopped")
 
     def _process_results(self, cam: CameraConfig, detections, frame: np.ndarray):
-        if detections is None or not hasattr(detections, 'boxes') or detections.boxes is None:
+        if detections is None or not detections or not hasattr(detections[0], 'boxes') or detections[0].boxes is None:
             return
 
         targets = set(cam.targets)
+        boxes = detections[0].boxes
+        names = detections[0].names
         frame_id = id(frame)
         saved_snapshot = False
 
-        for box in detections.boxes:
+        for box in boxes:
             class_id = int(box.cls[0].item())
             confidence = float(box.conf[0].item())
-            class_name = detections.names[class_id].lower()
+            class_name = names[class_id].lower()
 
             if class_name not in targets:
                 continue
@@ -281,7 +292,7 @@ class DetectorService:
 
             # Save annotated snapshot once per frame
             if not saved_snapshot or self._last_snapshot_frame_id != frame_id:
-                snapshot_path = self._save_snapshot(cam.alias, detections, frame)
+                snapshot_path = self._save_snapshot(cam.alias, detections[0], frame)
                 self._last_snapshot_frame_id = frame_id
                 self._last_rel_path = f"{cam.alias}/{snapshot_path.name}"
                 self._last_full_path = snapshot_path
@@ -290,11 +301,8 @@ class DetectorService:
             # Record alert in DB (one per class per frame)
             self._record_alert(cam.alias, class_name, confidence, self._last_full_path)
 
-            # Send push notification
-            asyncio.run_coroutine_threadsafe(
-                self._notify(cam.alias, class_name, confidence, self._last_full_path),
-                self._get_event_loop(),
-            )
+            # Send push and debug notifications (synchronous — we're in a thread)
+            self._notify(cam.alias, class_name, confidence, self._last_full_path)
 
     def _save_snapshot(self, camera_alias: str, results, frame: np.ndarray) -> Path:
         """Save an annotated snapshot to disk."""
@@ -357,7 +365,7 @@ class DetectorService:
                 asyncio.set_event_loop(self._loop)
         return self._loop
 
-    async def _notify(self, camera_alias, class_name, confidence, snapshot_path):
+    def _notify(self, camera_alias, class_name, confidence, snapshot_path):
         base_url = self._get_tunnel_base_url()
         title = f"🚨 {class_name.title()} detected"
         body = f"{camera_alias} · {confidence:.0%} confidence"
@@ -366,7 +374,7 @@ class DetectorService:
         if snapshot_path and snapshot_path.exists():
             rel = f"{camera_alias}/{snapshot_path.name}"
             image_url = f"{base_url}/api/snapshots/{rel}"
-        await self._notifier.send_ntfy(title, body, image_url=image_url)
+        self._notifier.send_ntfy(title, body, image_url=image_url)
 
         if settings.has_telegram:
             text = (
@@ -376,8 +384,8 @@ class DetectorService:
                 f"Confidence: {confidence:.0%}\n"
                 f"Time: {datetime.now(tz=timezone.utc).isoformat()}"
             )
-            await self._notifier.send_telegram(text)
+            self._notifier.send_telegram(text)
             if snapshot_path and snapshot_path.exists():
-                await self._notifier.send_telegram_photo(
+                self._notifier.send_telegram_photo(
                     snapshot_path, caption=f"{class_name} @ {camera_alias}"
                 )
