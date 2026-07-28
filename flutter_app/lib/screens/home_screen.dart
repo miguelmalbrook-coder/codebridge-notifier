@@ -13,41 +13,30 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
 
-  final _screens = const [
-    CameraListScreen(),
-    AlertFeedScreen(),
-    SettingsScreen(),
-  ];
+  static const _titles = ['Cameras', 'Alerts', 'Settings'];
+  static const _icons = [Icons.videocam_outlined, Icons.notifications_outlined, Icons.settings_outlined];
+  static const _selectedIcons = [Icons.videocam, Icons.notifications, Icons.settings];
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(title: Text(_titles[_currentIndex])),
       body: IndexedStack(
         index: _currentIndex,
-        children: _screens,
+        children: const [
+          CameraListScreen(),
+          AlertFeedScreen(),
+          SettingsScreen(),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() => _currentIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.videocam_outlined),
-            selectedIcon: Icon(Icons.videocam),
-            label: 'Cameras',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.notifications_outlined),
-            selectedIcon: Icon(Icons.notifications),
-            label: 'Alerts',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
+        onDestinationSelected: (index) => setState(() => _currentIndex = index),
+        destinations: List.generate(3, (i) => NavigationDestination(
+          icon: Icon(_icons[i]),
+          selectedIcon: Icon(_selectedIcons[i]),
+          label: _titles[i],
+        )),
       ),
     );
   }

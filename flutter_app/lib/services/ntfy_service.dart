@@ -6,11 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../config.dart';
 import 'app_config_service.dart';
+import '../supabase/client.dart';
 
 /// Subscribes to ntfy topic and shows local notifications.
+/// Also listens to Supabase Realtime for instant alerts (more reliable).
 class NtfyService {
   static final NtfyService _instance = NtfyService._();
   factory NtfyService() => _instance;
@@ -20,13 +23,12 @@ class NtfyService {
   Timer? _pollTimer;
   bool _initialized = false;
   String? _lastMessageId;
+  dynamic _realtimeChannel;
 
-  /// Initialize local notifications + request permissions + start polling.
   Future<void> start() async {
     if (_initialized) return;
     _initialized = true;
 
-    // Request notification permission on Android 13+
     if (Platform.isAndroid) {
       final status = await Permission.notification.request();
       if (status.isDenied || status.isPermanentlyDenied) {
@@ -34,17 +36,10 @@ class NtfyService {
       }
     }
 
-    // Init local notifications
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidSettings);
-    await _plugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (details) {
-        // Handle notification tap
-      },
-    );
+    await _plugin.initialize(initSettings);
 
-    // Create notification channel for Android
     final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidPlugin != null) {
@@ -58,62 +53,45 @@ class NtfyService {
       );
     }
 
-    // Start polling ntfy
+    // Subscribe to Supabase Realtime for INSTANT alerts
+    _subscribeRealtime();
+
+    // Keep ntfy polling as fallback
     _pollNtfy();
   }
 
   void stop() {
     _pollTimer?.cancel();
-    _pollTimer = null;
+    _realtimeChannel?.unsubscribe();
   }
 
-  void _pollNtfy() {
-    // Poll immediately, then every 15 seconds
-    _fetchAlerts();
-    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _fetchAlerts());
-  }
-
-  String _getNtfyBaseUrl() {
-    return AppConfigService().ntfyUrl;
-  }
-
-  /// Returns an ISO-8601 timestamp from 5 minutes ago for ntfy polling.
-  String _defaultSince() {
-    return DateTime.now().subtract(const Duration(minutes: 5)).toUtc().toIso8601String();
-  }
-
-  Future<void> _fetchAlerts() async {
+  void _subscribeRealtime() {
     try {
-      // Use ntfy tunnel URL from app_config, or fall back to local network
-      final ntfyHost = _getNtfyBaseUrl();
-      final sinceParam = _lastMessageId != null
-          ? '&since=$_lastMessageId'
-          : '&since=${_defaultSince()}';
-      final url = Uri.parse('$ntfyHost/codebridge-alerts/json?poll=1$sinceParam');
-      final res = await http.get(url).timeout(const Duration(seconds: 10));
-
-      if (res.statusCode == 200) {
-        final lines = res.body.split('\n').where((l) => l.trim().isNotEmpty);
-        for (final line in lines) {
-          try {
-            final msg = jsonDecode(line) as Map<String, dynamic>;
-            final id = msg['id'] as String?;
-            if (id != null && id != _lastMessageId) {
-              _lastMessageId = id;
-              await _showNotification(msg);
-            }
-          } catch (_) {}
-        }
-      }
+      _realtimeChannel = supabase
+          .channel('app-notifications')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.insert,
+            schema: 'public',
+            table: 'alerts',
+            callback: (payload) {
+              final newRecord = payload.newRecord as Map<String, dynamic>;
+              final className = newRecord['class_name'] as String? ?? 'Something';
+              final cameraId = newRecord['camera_id'] as String? ?? 'Camera';
+              final confidence = (newRecord['confidence'] as num?)?.toDouble() ?? 0;
+              _showLocalNotification(
+                '🚨 ${className.toUpperCase()} detected',
+                '$cameraId · ${(confidence * 100).round()}% confidence',
+              );
+            },
+          )
+          .subscribe();
+      debugPrint('Realtime notification subscription active');
     } catch (e) {
-      debugPrint('ntfy poll error: $e');
+      debugPrint('Realtime subscription error: $e');
     }
   }
 
-  Future<void> _showNotification(Map<String, dynamic> msg) async {
-    final title = msg['title'] as String? ?? 'Codebridge Alert';
-    final message = msg['message'] as String? ?? '';
-
+  void _showLocalNotification(String title, String body) {
     const androidDetails = AndroidNotificationDetails(
       'codebridge-alerts',
       'Camera Alerts',
@@ -124,11 +102,58 @@ class NtfyService {
     );
     const details = NotificationDetails(android: androidDetails);
 
-    await _plugin.show(
+    _plugin.show(
       DateTime.now().millisecondsSinceEpoch ~/ 1000,
       title,
-      message,
+      body,
       details,
     );
+  }
+
+  void _pollNtfy() {
+    _fetchAlerts();
+    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchAlerts());
+  }
+
+  String _getNtfyBaseUrl() {
+    return AppConfigService().ntfyUrl;
+  }
+
+  String _defaultSince() {
+    return DateTime.now().subtract(const Duration(minutes: 5)).toUtc().toIso8601String();
+  }
+
+  Future<void> _fetchAlerts() async {
+    try {
+      final ntfyHost = _getNtfyBaseUrl();
+      final sinceParam = _lastMessageId != null
+          ? '&since=$_lastMessageId'
+          : '&since=${_defaultSince()}';
+      final url = Uri.parse('$ntfyHost/codebridge-alerts/json?poll=1$sinceParam');
+
+      // Try old simple approach — might work if connection closes quickly
+      final res = await http.get(url).timeout(const Duration(seconds: 8));
+
+      if (res.statusCode == 200 && res.body.isNotEmpty) {
+        final lines = res.body.split('\n').where((l) => l.trim().isNotEmpty);
+        for (final line in lines) {
+          try {
+            final msg = jsonDecode(line) as Map<String, dynamic>;
+            if (msg['event'] == 'message') {
+              final id = msg['id'] as String?;
+              if (id != null && id != _lastMessageId) {
+                _lastMessageId = id;
+                final title = msg['title'] as String? ?? 'Codebridge Alert';
+                final message = msg['message'] as String? ?? '';
+                _showLocalNotification(title, message);
+              }
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      // Timeout is expected (ntfy holds connection open) — fallback to Realtime
+      debugPrint('ntfy poll: $e (realtime handles it)');
+    }
   }
 }

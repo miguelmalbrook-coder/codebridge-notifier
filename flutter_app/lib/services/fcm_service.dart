@@ -1,16 +1,15 @@
-import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../config.dart';
+import '../supabase/client.dart';
 
 /// Firebase Cloud Messaging (FCM) service — handles registration + incoming pushes.
-///
-/// WhatsApp-level push reliability. Works even when app is killed.
 class FcmService {
   static final FcmService _instance = FcmService._();
   factory FcmService() => _instance;
@@ -20,16 +19,35 @@ class FcmService {
   bool _initialized = false;
   String? _pendingToken;
 
+  bool isReady = false;
+  String? initError;
+  String registerStatus = 'Not started';
+  DateTime? lastAttempt;
+
+  /// Stream that notifies when status changes.
+  final statusController = StreamController<String>.broadcast();
+  Stream<String> get onStatusChange => statusController.stream;
+
+  void _setStatus(String s) {
+    registerStatus = s;
+    statusController.add(s);
+  }
+
   Future<void> init() async {
     if (_initialized) return;
     _initialized = true;
 
-    // Init local notifications for showing FCM messages
+    if (Platform.isAndroid) {
+      final status = await Permission.notification.request();
+      if (status.isDenied || status.isPermanentlyDenied) {
+        debugPrint('Notification permission denied');
+      }
+    }
+
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidSettings);
     await _localNotifications.initialize(initSettings);
 
-    // Create notification channel
     final androidPlugin = _localNotifications.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (androidPlugin != null) {
@@ -43,109 +61,95 @@ class FcmService {
       );
     }
 
-    // Request permission
     final messaging = FirebaseMessaging.instance;
     await messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      announcement: true,
-      criticalAlert: true,
+      alert: true, badge: true, sound: true,
+      announcement: true, criticalAlert: true,
     );
 
-    // Get FCM token
     _pendingToken = await messaging.getToken();
-    debugPrint('FCM token: ${_pendingToken?.substring(0, 20)}...');
+    isReady = true;
+    debugPrint('FCM token obtained: ${_pendingToken?.substring(0, 20)}...');
 
-    // Try to register if session exists, otherwise wait for login
-    _registerOrWait();
-
-    // Listen for token refresh
-    messaging.onTokenRefresh.listen((newToken) {
-      debugPrint('FCM token refreshed');
-      _pendingToken = newToken;
-      _registerOrWait();
-    });
-
-    // Handle foreground messages — show local notification
-    FirebaseMessaging.onMessage.listen(_showFcmNotification);
-
-    // Handle background message tap (app opened from notification)
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationTap);
-
-    // Handle app opened from terminated state via notification
-    final initialMessage = await messaging.getInitialMessage();
-    if (initialMessage != null) {
-      _handleNotificationTap(initialMessage);
-    }
-  }
-
-  /// Register token if session exists, otherwise subscribe to auth changes.
-  void _registerOrWait() {
+    // Register if already logged in
     final session = Supabase.instance.client.auth.currentSession;
-    if (session != null && _pendingToken != null) {
-      _registerToken(_pendingToken!);
+    if (session != null) {
+      register(session);
     }
-    // Listen for future auth changes
+
+    // Listen for auth changes
     Supabase.instance.client.auth.onAuthStateChange.listen((authState) {
       if (authState.session != null && _pendingToken != null) {
-        _registerToken(_pendingToken!);
+        register(authState.session!);
       }
     });
+
+    // Token refresh
+    messaging.onTokenRefresh.listen((newToken) {
+      _pendingToken = newToken;
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session != null) register(session);
+    });
+
+    // Foreground messages
+    FirebaseMessaging.onMessage.listen(_showNotification);
+    FirebaseMessaging.onMessageOpenedApp.listen((m) {});
   }
 
-  Future<void> _registerToken(String token) async {
-    try {
-      final session = Supabase.instance.client.auth.currentSession;
-      if (session == null) return;
+  /// Manual or automatic register — called from Settings button too.
+  Future<void> register(Session session) async {
+    if (_pendingToken == null) {
+      _setStatus('No FCM token');
+      return;
+    }
+    lastAttempt = DateTime.now();
+    _setStatus('Registering...');
 
-      final res = await http.post(
-        Uri.parse('${BackendConfig.baseUrl}/api/devices/register'),
-        headers: {
-          'Authorization': 'Bearer ${session.accessToken}',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'token': token,
-          'platform': 'android',
-        }),
-      );
-      if (res.statusCode == 200) {
-        debugPrint('FCM token registered ✅');
-      } else {
-        debugPrint('FCM token registration failed: ${res.statusCode}');
-      }
+    try {
+      // Insert directly into Supabase — no backend middleman needed
+      final userId = session.user.id;
+      debugPrint('FCM register: user=$userId, token=${_pendingToken!.substring(0, 20)}...');
+
+      // Delete any old token for this device, then insert new one
+      await supabase
+          .from('device_tokens')
+          .delete()
+          .eq('token', _pendingToken!);
+
+      final res = await supabase
+          .from('device_tokens')
+          .insert({
+            'user_id': userId,
+            'token': _pendingToken,
+            'platform': 'android',
+          });
+
+      _setStatus('Registered ✅');
+      debugPrint('FCM token registered ✅');
     } catch (e) {
+      _setStatus('Error: $e');
       debugPrint('FCM register error: $e');
     }
   }
 
-  void _showFcmNotification(RemoteMessage message) {
-    final notification = message.notification;
-    if (notification == null) return;
-
-    final title = notification.title ?? 'Codebridge Alert';
-    final body = notification.body ?? '';
-
-    final androidDetails = AndroidNotificationDetails(
-      'codebridge-alerts',
-      'Camera Alerts',
-      channelDescription: 'Push notifications from camera detections',
-      importance: Importance.high,
-      priority: Priority.high,
-      icon: '@mipmap/ic_launcher',
+  void _showNotification(RemoteMessage message) {
+    final n = message.notification;
+    if (n == null) return;
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'codebridge-alerts', 'Camera Alerts',
+        importance: Importance.high, priority: Priority.high,
+        icon: '@mipmap/ic_launcher',
+      ),
     );
-    final details = NotificationDetails(android: androidDetails);
-
     _localNotifications.show(
       DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title,
-      body,
-      details,
+      n.title ?? 'Alert', n.body ?? '', details,
     );
   }
 
-  void _handleNotificationTap(RemoteMessage message) {
-    debugPrint('FCM notification tapped: ${message.messageId}');
+  void stop() {
+    _localNotifications.cancelAll();
+    statusController.close();
   }
 }

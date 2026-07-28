@@ -18,7 +18,10 @@ async def register_device(
 ):
     """Register a device FCM token for push notifications."""
     db = get_db()
-    user_id = user.get("id") or user.get("sub", "")
+    # Extract user ID from various possible JWT formats
+    user_id = (user.get("sub") or user.get("id") or user.get("user_id") or "")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Could not extract user ID from token")
 
     # Upsert: remove old token + insert new
     db.table("device_tokens").delete().eq("token", body.token).execute()

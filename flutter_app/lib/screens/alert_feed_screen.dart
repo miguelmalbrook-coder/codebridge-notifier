@@ -20,6 +20,7 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
   bool _hasMore = true;
   final _scrollCtrl = ScrollController();
   dynamic _channel;
+  Timer? _autoRefresh;
 
   // Filters
   String? _filterCamera;
@@ -33,6 +34,39 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
     _loadAlerts();
     _scrollCtrl.addListener(_onScroll);
     _subscribeRealtime();
+    // Auto-refresh every 5 seconds (silent, no spinner)
+    _autoRefresh = Timer.periodic(const Duration(seconds: 5), (_) {
+      _silentRefresh();
+    });
+  }
+
+  void _silentRefresh() {
+    supabase
+        .from('alerts')
+        .select('*')
+        .order('seen_at', ascending: false)
+        .limit(20)
+        .then((response) {
+      if (!mounted) return;
+      final data = response as List<dynamic>;
+      final parsed =
+          data.map((json) => Alert.fromJson(json as Map<String, dynamic>)).toList();
+
+      // Only add NEW alerts, don't replace the full list (preserves pagination)
+      final existingIds = _allAlerts.map((a) => a.id).toSet();
+      final newAlerts = parsed.where((a) => !existingIds.contains(a.id)).toList();
+
+      if (newAlerts.isNotEmpty) {
+        setState(() {
+          _allAlerts.insertAll(0, newAlerts);
+          // Extract camera options
+          final cameras = parsed.map((a) => a.cameraId).toSet();
+          for (final c in cameras) {
+            if (!_cameraOptions.contains(c)) _cameraOptions.add(c);
+          }
+        });
+      }
+    }).catchError((_) {}); // Silently fail
   }
 
   void _subscribeRealtime() {
@@ -115,6 +149,7 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
 
   @override
   void dispose() {
+    _autoRefresh?.cancel();
     _channel?.unsubscribe();
     _scrollCtrl.dispose();
     super.dispose();
@@ -125,28 +160,11 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
     final theme = Theme.of(context);
     final filtered = _filteredAlerts;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Alerts'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: () {
-              setState(() {
-                _page = 1;
-                _hasMore = true;
-                _allAlerts = [];
-              });
-              _loadAlerts();
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // ── Filter bar ──
-          if (_cameraOptions.isNotEmpty || _allAlerts.isNotEmpty)
-            Container(
+    return Column(
+      children: [
+        // ── Filter bar ──
+        if (_cameraOptions.isNotEmpty || _allAlerts.isNotEmpty)
+          Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -280,8 +298,7 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
                       ),
           ),
         ],
-      ),
-    );
+      );
   }
 
   Widget _filterChip(String label, bool selected, VoidCallback onTap) {

@@ -22,7 +22,7 @@ services:
       - ./ntfy-cache:/var/cache/ntfy
       - ./ntfy-etc:/etc/ntfy
     environment:
-      - NTFY_BASE_URL=http://192.168.100.20:8090
+      - NTFY_BASE_URL=https://situated-com-minerals-burns.trycloudflare.com
       - NTFY_CACHE_FILE=/var/cache/ntfy/cache.db
       - NTFY_BEHIND_PROXY=true
 

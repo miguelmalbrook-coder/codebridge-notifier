@@ -1,10 +1,14 @@
 import 'dart:convert';
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 import '../auth/auth_service.dart';
 import '../config.dart';
 import '../supabase/client.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/fcm_service.dart';
 import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -21,11 +25,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<String> _availableTargets = [];
   bool _loading = true;
   bool _saving = false;
+  String _appVersion = '';
+  StreamSubscription? _fcmSub;
+  String _fcmStatus = '';
 
   @override
   void initState() {
     super.initState();
     _loadAll();
+    _loadVersion();
+    // Live-update FCM status
+    _fcmSub = FcmService().onStatusChange.listen((s) {
+      if (mounted) setState(() => _fcmStatus = s);
+    });
+    _fcmStatus = FcmService().registerStatus;
+  }
+
+  @override
+  void dispose() {
+    _fcmSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      _appVersion = '${info.version}+${info.buildNumber}';
+    } catch (_) {
+      _appVersion = '0.9.0';
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadAll() async {
@@ -86,11 +115,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
+    return _loading
+        ? const Center(child: CircularProgressIndicator())
+        : ListView(
               padding: const EdgeInsets.all(16),
               children: [
                 // Per-Camera Settings
@@ -139,6 +166,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         _row('Backend', BackendConfig.baseUrl),
                         const SizedBox(height: 4),
                         _row('User', _auth.currentUser?.email ?? 'unknown'),
+                        const SizedBox(height: 4),
+                        _row('FCM', FcmService().isReady ? 'Ready ✅' : 'Not ready ❌'),
+                        if (!FcmService().isReady) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            FcmService().initError ?? 'Firebase init failed.',
+                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
+                          ),
+                        ],
+                        const SizedBox(height: 4),
+                        Text('Status: $_fcmStatus',
+                            style: theme.textTheme.bodySmall),
+                        if (_fcmStatus != 'Registered ✅' && FcmService().isReady) ...[
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final session = Supabase.instance.client.auth.currentSession;
+                                if (session != null) {
+                                  await FcmService().register(session);
+                                }
+                              },
+                              icon: const Icon(Icons.refresh, size: 16),
+                              label: const Text('Retry Registration'),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -160,10 +215,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 32),
                 Center(
-                  child: Text('Codebridge Notifier v0.5.0', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  child: Text('Codebridge Notifier v$_appVersion', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                 ),
               ],
-            ),
     );
   }
 

@@ -29,23 +29,26 @@ class Notifier:
     # ── ntfy (Customer push) ──────────────────────────────────────────
 
     def send_ntfy(self, title: str, body: str, image_url: str | None = None) -> bool:
-        """Send push notification via ntfy."""
-        payload = {
-            "topic": NTFY_TOPIC,
-            "title": title,
-            "message": body,
-            "priority": "high",
-            "tags": ["warning", "camera"],
+        """Send push notification via ntfy.
+
+        Publishes directly to the topic endpoint (not /publish) because
+        ntfy ignores the 'topic' field in JSON posted to /publish.
+        Uses headers for metadata (Title, Priority, Tags).
+        """
+        headers = {
+            "Title": title,
+            "Priority": "high",
+            "Tags": "warning,camera",
         }
         if image_url:
-            payload["attach"] = image_url
-            payload["click"] = image_url
+            headers["Click"] = image_url
 
         try:
             with httpx.Client(timeout=10) as client:
                 resp = client.post(
-                    f"{NTFY_URL}/publish",
-                    json=payload,
+                    f"{NTFY_URL}/{NTFY_TOPIC}",
+                    content=body.encode("utf-8"),
+                    headers=headers,
                 )
                 if resp.status_code == 200:
                     log.info("ntfy sent: %s", title)
