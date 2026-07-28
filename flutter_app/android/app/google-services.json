@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "543962529025",
+    "project_id": "yolonotifier",
+    "storage_bucket": "yolonotifier.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:543962529025:android:cb90ee9a213c3efcc32f00",
+        "android_client_info": {
+          "package_name": "com.codebridge.codebridge_notifier"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9B8WThqs86Ib3OuEPpVjxM5mPZ2J8SJI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

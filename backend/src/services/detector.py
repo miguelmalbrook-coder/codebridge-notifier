@@ -28,7 +28,7 @@ from src.services.runtime_settings import get_runtime_settings
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "yolo11s.pt"
-CAMERA_REFRESH_INTERVAL = 30.0
+CAMERA_REFRESH_INTERVAL = 5.0  # Check for settings changes every 5 seconds
 DEFAULT_MOTION_SENSITIVITY = 0.001  # 0.1% of pixels changed
 
 
@@ -77,6 +77,8 @@ class CameraConfig:
         self.cooldown = int(row.get("cooldown_seconds") or 15)
         self.targets = row.get("targets") or ["person", "car", "cat", "dog"]
         self.motion_sensitivity = float(row.get("motion_sensitivity") or DEFAULT_MOTION_SENSITIVITY)
+        # Per-class confidence: dict like {"car": 0.3, "person": 0.6}
+        self.class_confidences = (row.get("class_confidences") or {}) if isinstance(row.get("class_confidences"), dict) else {}
 
     @classmethod
     def from_db_row(cls, row: dict) -> CameraConfig | None:
@@ -140,9 +142,9 @@ class DetectorService:
         """Fetch active cameras with ALL their per-camera settings from Supabase."""
         try:
             db = get_db()
-            result = db.table("cameras").select(
-                "alias,rtsp_url,id,status,detection_mode,model,confidence,cooldown_seconds,targets,motion_sensitivity"
-            ).execute()
+            # Try with all columns first, fall back to basic columns if new ones don't exist
+            columns = "alias,rtsp_url,id,status,detection_mode,model,confidence,cooldown_seconds,targets,motion_sensitivity,class_confidences"
+            result = db.table("cameras").select(columns).execute()
             cameras = result.data or []
             if cameras:
                 configs = []
@@ -153,7 +155,26 @@ class DetectorService:
                 log.info("Loaded %d camera(s) with per-camera settings", len(configs))
                 return configs
         except Exception as e:
-            log.warning("Could not load cameras from DB: %s", e)
+            err_msg = str(e)
+            log.warning("Full select failed: %s", err_msg[:120])
+            # Fallback: try without new columns
+            try:
+                db = get_db()
+                result = db.table("cameras").select(
+                    "alias,rtsp_url,id,status,detection_mode,model,confidence,cooldown_seconds,targets,motion_sensitivity"
+                ).execute()
+                cameras = result.data or []
+                if cameras:
+                    configs = []
+                    for row in cameras:
+                        row["class_confidences"] = {}
+                        cam = CameraConfig.from_db_row(row)
+                        if cam:
+                            configs.append(cam)
+                    log.info("Loaded %d camera(s) with basic settings (no class_confidences)", len(configs))
+                    return configs
+            except Exception as e2:
+                log.warning("Fallback select also failed: %s", str(e2)[:120])
 
         return []
 
@@ -200,6 +221,14 @@ class DetectorService:
         except Exception:
             pass
         return f"http://{settings.host}:{settings.port}"
+
+    def _get_access_token(self) -> str | None:
+        """Get a token for snapshot URLs in notifications (Supabase anon key).
+        
+        Devices that receive ntfy notifications use this token to access
+        protected snapshot images without a user session.
+        """
+        return settings.supabase_anon_key
 
     def _run(self):
         log.info("Detector thread started")
@@ -248,9 +277,11 @@ class DetectorService:
                 if model is None:
                     continue
 
-                # Run detection with per-camera confidence
+                # Run detection
                 try:
-                    results = model(frame, conf=cam.confidence, verbose=False)
+                    # Use the lowest confidence threshold so all classes are detected
+                    min_conf = min(cam.class_confidences.values()) if cam.class_confidences else cam.confidence
+                    results = model(frame, conf=min_conf, verbose=False)
                     total = len(results[0].boxes) if results[0].boxes else 0
                     target_matches = 0
                     if total > 0:
@@ -259,7 +290,7 @@ class DetectorService:
                             if cls in set(cam.targets):
                                 target_matches += 1
                         if target_matches > 0:
-                            log.info("Frame %s: %d target(s) found", cam.alias, target_matches)
+                            log.debug("Frame %s: %d target(s) found", cam.alias, target_matches)
                     self._process_results(cam, results, frame)
                 except Exception as e:
                     log.error("Detection error on %s: %s", cam.alias, e)
@@ -285,6 +316,12 @@ class DetectorService:
 
             if class_name not in targets:
                 continue
+
+            # Per-class confidence check
+            class_conf = cam.class_confidences.get(class_name)
+            if class_conf is not None and confidence < class_conf:
+                continue
+
             if not self._gate.can_alert(cam.alias, class_name, cam.cooldown):
                 continue
 
@@ -292,7 +329,7 @@ class DetectorService:
 
             # Save annotated snapshot once per frame
             if not saved_snapshot or self._last_snapshot_frame_id != frame_id:
-                snapshot_path = self._save_snapshot(cam.alias, detections[0], frame)
+                snapshot_path = self._save_snapshot(cam.alias, detections[0], frame, targets)
                 self._last_snapshot_frame_id = frame_id
                 self._last_rel_path = f"{cam.alias}/{snapshot_path.name}"
                 self._last_full_path = snapshot_path
@@ -304,14 +341,19 @@ class DetectorService:
             # Send push and debug notifications (synchronous — we're in a thread)
             self._notify(cam.alias, class_name, confidence, self._last_full_path)
 
-    def _save_snapshot(self, camera_alias: str, results, frame: np.ndarray) -> Path:
-        """Save an annotated snapshot to disk."""
+    def _save_snapshot(self, camera_alias: str, results, frame: np.ndarray, target_set: set | None = None) -> Path:
+        """Save an annotated snapshot to disk. Only annotates target classes if target_set provided."""
         annotated = frame.copy()
-        for box in results.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+        all_boxes = results.boxes
+        target_set = target_set or set()
+        for box in all_boxes:
             class_id = int(box.cls[0].item())
             confidence = float(box.conf[0].item())
             class_name = results.names[class_id]
+            # Only draw boxes for target classes (or all if no target_set)
+            if target_set and class_name.lower() not in target_set:
+                continue
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             color = (0, 255, 0) if class_name == "person" else (255, 165, 0)
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
             label = f"{class_name} {confidence:.0%}"
@@ -373,19 +415,36 @@ class DetectorService:
         image_url = None
         if snapshot_path and snapshot_path.exists():
             rel = f"{camera_alias}/{snapshot_path.name}"
-            image_url = f"{base_url}/api/snapshots/{rel}"
+            # Include a public access token so the image loads in notifications
+            token = self._get_access_token()
+            token_suffix = f"?token={token}" if token else ""
+            image_url = f"{base_url}/api/snapshots/{rel}{token_suffix}"
         self._notifier.send_ntfy(title, body, image_url=image_url)
 
-        if settings.has_telegram:
-            text = (
-                f"<b>🚨 DETECTION</b>\n"
-                f"Camera: {camera_alias}\n"
-                f"Object: {class_name}\n"
-                f"Confidence: {confidence:.0%}\n"
-                f"Time: {datetime.now(tz=timezone.utc).isoformat()}"
+        # FCM push (WhatsApp-level — works when app is killed)
+        try:
+            from src.services.fcm import FCMPusher
+            fcm = FCMPusher()
+            fcm.send_to_all_devices(
+                title=title,
+                body=body,
+                image_url=image_url,
+                data={"camera": camera_alias, "class": class_name, "confidence": str(round(confidence, 2))},
             )
-            self._notifier.send_telegram(text)
-            if snapshot_path and snapshot_path.exists():
-                self._notifier.send_telegram_photo(
-                    snapshot_path, caption=f"{class_name} @ {camera_alias}"
-                )
+        except Exception as e:
+            log.warning("FCM push error: %s", e)
+
+        # Telegram debug alerts — temporarily disabled
+        # if settings.has_telegram:
+        #     text = (
+        #         f"<b>🚨 DETECTION</b>\n"
+        #         f"Camera: {camera_alias}\n"
+        #         f"Object: {class_name}\n"
+        #         f"Confidence: {confidence:.0%}\n"
+        #         f"Time: {datetime.now(tz=timezone.utc).isoformat()}"
+        #     )
+        #     self._notifier.send_telegram(text)
+        #     if snapshot_path and snapshot_path.exists():
+        #         self._notifier.send_telegram_photo(
+        #             snapshot_path, caption=f"{class_name} @ {camera_alias}"
+        #         )

@@ -53,7 +53,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final response = await supabase
           .from('cameras')
-          .select('id, alias, detection_mode, model, confidence, cooldown_seconds, targets, motion_sensitivity')
+          .select('id, alias, detection_mode, model, confidence, cooldown_seconds, targets, motion_sensitivity, class_confidences')
           .order('created_at');
       setState(() {
         _cameras = (response as List<dynamic>).cast<Map<String, dynamic>>();
@@ -216,19 +216,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 16),
 
-                // Confidence
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _label('Confidence', theme),
-                    Text('${(conf * 100).round()}%', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                Slider(
-                  value: conf, min: 0.05, max: 0.95, divisions: 18,
-                  onChanged: (v) => _saveCameraSetting(camId, 'confidence', double.parse(v.toStringAsFixed(2))),
-                ),
-
                 // Cooldown
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -260,28 +247,102 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 8),
                 ],
 
-                // Targets
+                // Targets + Per-Class Confidence
+                const SizedBox(height: 12),
+                _label('Detection Targets & Confidence', theme),
                 const SizedBox(height: 8),
-                _label('Detection Targets', theme),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 0,
-                  children: _availableTargets.map((t) {
-                    final selected = targets.contains(t);
-                    return FilterChip(
-                      label: Text(t),
-                      selected: selected,
-                      onSelected: (sel) {
-                        final updated = List<String>.from(targets);
-                        if (sel) updated.add(t); else updated.remove(t);
-                        _saveCameraSetting(camId, 'targets', updated);
-                      },
-                      selectedColor: theme.colorScheme.primaryContainer,
-                      visualDensity: VisualDensity.compact,
-                    );
-                  }).toList(),
-                ),
+
+                // Selected targets with confidence sliders
+                ..._availableTargets.where((t) => targets.contains(t)).map((t) {
+                  final classConfs = Map<String, double>.from(
+                    (cam['class_confidences'] as Map<dynamic, dynamic>?)
+                            ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
+                        {},
+                  );
+                  final classConf = classConfs[t];
+                  final currentConf = classConf ?? conf;
+                  final pct = (currentConf * 100).round();
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Chip(
+                              label: Text(t, style: const TextStyle(fontSize: 13)),
+                              deleteIcon: const Icon(Icons.close, size: 16),
+                              onDeleted: () {
+                                final updated = List<String>.from(targets);
+                                updated.remove(t);
+                                final newConfs = Map<String, double>.from(classConfs);
+                                newConfs.remove(t);
+                                _saveCameraSetting(camId, 'class_confidences', newConfs);
+                                _saveCameraSetting(camId, 'targets', updated);
+                              },
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Slider(
+                                value: currentConf,
+                                min: 0.05,
+                                max: 0.95,
+                                divisions: 18,
+                                label: '$pct%',
+                                onChanged: (v) {
+                                  // Live visual update only — saves on drag end
+                                },
+                                onChangeEnd: (v) {
+                                  final newConfs = Map<String, double>.from(classConfs);
+                                  newConfs[t] = double.parse(v.toStringAsFixed(2));
+                                  _saveCameraSetting(camId, 'class_confidences', newConfs);
+                                },
+                              ),
+                            ),
+                            SizedBox(
+                              width: 36,
+                              child: Text(
+                                '$pct%',
+                                textAlign: TextAlign.right,
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  color: theme.colorScheme.primary,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+
+                // Unselected targets (add via chips)
+                if (_availableTargets.any((t) => !targets.contains(t))) ...[
+                  const SizedBox(height: 4),
+                  const Divider(height: 1),
+                  const SizedBox(height: 8),
+                  Text('Add target:', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: _availableTargets.where((t) => !targets.contains(t)).map((t) {
+                      return FilterChip(
+                        label: Text(t, style: const TextStyle(fontSize: 12)),
+                        selected: false,
+                        onSelected: (_) {
+                          final updated = List<String>.from(targets);
+                          updated.add(t);
+                          _saveCameraSetting(camId, 'targets', updated);
+                        },
+                        visualDensity: VisualDensity.compact,
+                      );
+                    }).toList(),
+                  ),
+                ],
               ],
             ),
           ),

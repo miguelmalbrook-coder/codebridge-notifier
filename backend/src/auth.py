@@ -2,6 +2,7 @@
 
 Accepts token via Authorization header (primary) or `token` query param (fallback
 for Flutter Image.network which can't set custom headers).
+Also accepts the Supabase anon key for public snapshot access via ntfy notifications.
 """
 
 from __future__ import annotations
@@ -20,15 +21,20 @@ def verify_token(
 
     Primary: Authorization: Bearer <token> (from fetch/XHR clients).
     Fallback: ?token=<token> query parameter (for Flutter Image.network).
+    Also accepts Supabase anon key for public snapshot access.
 
     Returns the decoded user dict on success. Raises 401 on invalid tokens.
     """
-    jwt = _extract_jwt(authorization, token)
+    jwt = _extract_jwt(authorization, token, settings.supabase_anon_key)
     if jwt is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or malformed Authorization header",
         )
+
+    # Allow anon key for snapshot access (used by ntfy notifications)
+    if jwt == settings.supabase_anon_key:
+        return {"id": "anon", "email": "anon@notification"}
 
     try:
         client = create_client(settings.supabase_url, settings.supabase_anon_key)
@@ -41,10 +47,15 @@ def verify_token(
         )
 
 
-def _extract_jwt(authorization: str, token_param: str | None) -> str | None:
+def _extract_jwt(authorization: str, token_param: str | None, anon_key: str) -> str | None:
     """Try Authorization header first, then query param."""
+    # Allow anon key in Authorization header
+    if authorization == anon_key:
+        return anon_key
     if authorization.startswith("Bearer "):
-        return authorization.removeprefix("Bearer ")
+        bearer = authorization.removeprefix("Bearer ")
+        if bearer:
+            return bearer
     if token_param and len(token_param) > 20:
         return token_param
     return None

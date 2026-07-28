@@ -36,6 +36,17 @@ async def lifespan(app: FastAPI):
     _detector_thread = detector.start()
     log.info("Detector thread started")
 
+    # Pre-load YOLO model so available_targets are populated immediately
+    try:
+        from ultralytics import YOLO
+        m = YOLO("yolo11n.pt")
+        names = list(m.names.values())
+        from src.services.runtime_settings import get_runtime_settings
+        get_runtime_settings().set_available_targets(names)
+        log.info("Pre-loaded YOLO model with %d classes", len(names))
+    except Exception as e:
+        log.warning("Could not pre-load YOLO model: %s", e)
+
     yield
 
     log.info("Shutting down...")
