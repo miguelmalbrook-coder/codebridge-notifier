@@ -173,6 +173,7 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
                           )),
                     ],
                   ),
+                ),
                 const SizedBox(height: 8),
                 Text('Class', style: theme.textTheme.labelSmall),
                 const SizedBox(height: 4),
