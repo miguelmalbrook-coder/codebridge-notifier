@@ -179,15 +179,14 @@ class DetectorService:
         return []
 
     def _update_camera_status(self, camera_id: str, status: str):
-        if self._camera_statuses.get(camera_id) == status:
-            return
         try:
             db = get_db()
-            db.table("cameras").update({
-                "status": status,
-                "last_seen": datetime.now(tz=timezone.utc).isoformat(),
-            }).eq("id", camera_id).execute()
-            self._camera_statuses[camera_id] = status
+            update = {"last_seen": datetime.now(tz=timezone.utc).isoformat()}
+            # Only update status if it actually changed
+            if self._camera_statuses.get(camera_id) != status:
+                update["status"] = status
+                self._camera_statuses[camera_id] = status
+            db.table("cameras").update(update).eq("id", camera_id).execute()
         except Exception as e:
             log.warning("Failed to update camera %s status: %s", camera_id, e)
 
@@ -363,7 +362,7 @@ class DetectorService:
         h, w = annotated.shape[:2]
         bar_h = 30
         caption_bar = np.zeros((bar_h, w, 3), dtype=np.uint8)
-        ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         caption = f"{camera_alias} | {ts}"
         cv2.putText(caption_bar, caption, (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -409,8 +408,8 @@ class DetectorService:
 
     def _notify(self, camera_alias, class_name, confidence, snapshot_path):
         base_url = self._get_tunnel_base_url()
-        title = f"🚨 {class_name.title()} detected"
-        body = f"{camera_alias} · {confidence:.0%} confidence"
+        title = f"🚨 {class_name.title()} at {camera_alias.title()}"
+        body = f"{confidence:.0%} confidence"
 
         image_url = None
         if snapshot_path and snapshot_path.exists():

@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:realtime_client/realtime_client.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../supabase/client.dart';
 import '../models/alert.dart';
 import '../widgets/alert_tile.dart';
@@ -22,11 +22,11 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
   dynamic _channel;
   Timer? _autoRefresh;
 
-  // Filters
+  // Filters — passed to server
   String? _filterCamera;
   String? _filterClass;
   List<String> _cameraOptions = [];
-  List<String> _classOptions = ['person', 'car', 'cat', 'dog', 'motorcycle', 'truck', 'bus', 'bicycle'];
+  static const _classOptions = ['person', 'car', 'cat', 'dog', 'motorcycle', 'truck', 'bus', 'bicycle'];
 
   @override
   void initState() {
@@ -34,39 +34,11 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
     _loadAlerts();
     _scrollCtrl.addListener(_onScroll);
     _subscribeRealtime();
-    // Auto-refresh every 5 seconds (silent, no spinner)
-    _autoRefresh = Timer.periodic(const Duration(seconds: 5), (_) {
-      _silentRefresh();
-    });
+    _autoRefresh = Timer.periodic(const Duration(seconds: 5), (_) => _silentRefresh());
   }
 
   void _silentRefresh() {
-    supabase
-        .from('alerts')
-        .select('*')
-        .order('seen_at', ascending: false)
-        .limit(20)
-        .then((response) {
-      if (!mounted) return;
-      final data = response as List<dynamic>;
-      final parsed =
-          data.map((json) => Alert.fromJson(json as Map<String, dynamic>)).toList();
-
-      // Only add NEW alerts, don't replace the full list (preserves pagination)
-      final existingIds = _allAlerts.map((a) => a.id).toSet();
-      final newAlerts = parsed.where((a) => !existingIds.contains(a.id)).toList();
-
-      if (newAlerts.isNotEmpty) {
-        setState(() {
-          _allAlerts.insertAll(0, newAlerts);
-          // Extract camera options
-          final cameras = parsed.map((a) => a.cameraId).toSet();
-          for (final c in cameras) {
-            if (!_cameraOptions.contains(c)) _cameraOptions.add(c);
-          }
-        });
-      }
-    }).catchError((_) {}); // Silently fail
+    _fetchAlerts(page: 1, replace: true);
   }
 
   void _subscribeRealtime() {
@@ -77,12 +49,10 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
           schema: 'public',
           table: 'alerts',
           callback: (payload) {
-            final newAlert = Alert.fromJson(
-                payload.newRecord as Map<String, dynamic>);
+            final newAlert = Alert.fromJson(payload.newRecord as Map<String, dynamic>);
             if (mounted) {
               setState(() {
                 _allAlerts.insert(0, newAlert);
-                // Extract camera options dynamically
                 if (!_cameraOptions.contains(newAlert.cameraId)) {
                   _cameraOptions.add(newAlert.cameraId);
                 }
@@ -93,58 +63,81 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
         .subscribe();
   }
 
-  List<Alert> get _filteredAlerts {
-    return _allAlerts.where((a) {
-      if (_filterCamera != null && a.cameraId != _filterCamera) return false;
-      if (_filterClass != null && a.className != _filterClass) return false;
-      return true;
-    }).toList();
-  }
-
-  Future<void> _loadAlerts() async {
-    if (!_hasMore) return;
-    setState(() => _loading = _page == 1);
-
+  /// Server-side filtered query
+  Future<void> _fetchAlerts({required int page, bool replace = false}) async {
     try {
-      final response = await supabase
-          .from('alerts')
-          .select('*')
-          .order('seen_at', ascending: false)
-          .range((_page - 1) * 20, _page * 20 - 1);
+      var query = supabase.from('alerts').select('*');
+
+      // Server-side filters
+      if (_filterCamera != null) {
+        query = query.eq('camera_id', _filterCamera!);
+      }
+      if (_filterClass != null) {
+        query = query.eq('class_name', _filterClass!);
+      }
+
+      final start = (page - 1) * 50;
+      final end = page * 50 - 1;
+
+      final response = await query.order('seen_at', ascending: false).range(start, end);
 
       final data = response as List<dynamic>;
-      final parsed =
-          data.map((json) => Alert.fromJson(json as Map<String, dynamic>)).toList();
+      final parsed = data.map((json) => Alert.fromJson(json as Map<String, dynamic>)).toList();
 
-      // Extract camera options
-      final cameras = parsed.map((a) => a.cameraId).toSet();
-      for (final c in cameras) {
-        if (!_cameraOptions.contains(c)) _cameraOptions.add(c);
+      // Get camera options from cameras table (not alerts — more reliable)
+      if (page == 1 && _cameraOptions.isEmpty) {
+        final camsData = await supabase.from('cameras').select('alias');
+        final cams = (camsData as List).map((a) => a['alias'] as String).toSet();
+        _cameraOptions = cams.toList()..sort();
       }
 
-      setState(() {
-        _allAlerts.addAll(parsed);
-        _hasMore = parsed.length == 20;
-        _page++;
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          if (replace) {
+            _allAlerts = parsed;
+          } else {
+            // Deduplicate
+            final existingIds = _allAlerts.map((a) => a.id).toSet();
+            final newAlerts = parsed.where((a) => !existingIds.contains(a.id)).toList();
+            _allAlerts.addAll(newAlerts);
+          }
+          _hasMore = parsed.length == 50;
+          _page = page + 1;
+          _loading = false;
+        });
+      }
     } catch (e) {
       if (mounted) {
+        setState(() => _loading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Failed to load alerts: $e'),
-              backgroundColor: Colors.red),
+          SnackBar(content: Text('Failed to load alerts: $e'), backgroundColor: Colors.red),
         );
       }
-      setState(() => _loading = false);
     }
+  }
+
+  void _loadAlerts() {
+    setState(() => _loading = true);
+    _fetchAlerts(page: 1, replace: true);
   }
 
   void _onScroll() {
-    if (_scrollCtrl.position.pixels >=
-        _scrollCtrl.position.maxScrollExtent - 200) {
-      _loadAlerts();
+    if (_scrollCtrl.position.pixels >= _scrollCtrl.position.maxScrollExtent - 200) {
+      if (!_loading && _hasMore) {
+        _fetchAlerts(page: _page);
+      }
     }
+  }
+
+  void _applyFilter({String? camera, String? cls, bool clearCamera = false, bool clearClass = false}) {
+    setState(() {
+      _filterCamera = clearCamera ? null : (camera ?? _filterCamera);
+      _filterClass = clearClass ? null : (cls ?? _filterClass);
+      _allAlerts = [];
+      _page = 1;
+      _hasMore = true;
+    });
+    _loadAlerts();
   }
 
   @override
@@ -158,147 +151,111 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final filtered = _filteredAlerts;
 
     return Column(
       children: [
         // ── Filter bar ──
         if (_cameraOptions.isNotEmpty || _allAlerts.isNotEmpty)
           Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Camera filter chips
-                  if (_cameraOptions.isNotEmpty) ...[
-                    Text('Camera', style: theme.textTheme.labelSmall),
-                    const SizedBox(height: 4),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Camera', style: theme.textTheme.labelSmall),
+                const SizedBox(height: 4),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _filterChip('All', _filterCamera == null, () => _applyFilter(clearCamera: true)),
+                      ..._cameraOptions.map((cam) => _filterChip(
+                            cam, _filterCamera == cam, () => _applyFilter(camera: cam),
+                          )),
+                    ],
+                  ),
+                const SizedBox(height: 8),
+                Text('Class', style: theme.textTheme.labelSmall),
+                const SizedBox(height: 4),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _filterChip('All', _filterClass == null, () => _applyFilter(clearClass: true)),
+                      ..._classOptions.map((cls) => _filterChip(
+                            cls, _filterClass == cls, () => _applyFilter(cls: cls),
+                          )),
+                    ],
+                  ),
+                ),
+                if (_filterCamera != null || _filterClass != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Text('${_allAlerts.length} alerts shown',
+                          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary)),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () => _applyFilter(clearCamera: true, clearClass: true),
+                        child: Text('Clear filters',
+                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error)),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        if (_cameraOptions.isNotEmpty || _allAlerts.isNotEmpty) const Divider(height: 1),
+
+        // ── Alert list ──
+        Expanded(
+          child: _allAlerts.isEmpty && _loading
+              ? const Center(child: CircularProgressIndicator())
+              : _allAlerts.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          _filterChip('All', _filterCamera == null, () {
-                            setState(() => _filterCamera = null);
-                          }),
-                          ..._cameraOptions.map((cam) => _filterChip(
-                                cam,
-                                _filterCamera == cam,
-                                () => setState(() => _filterCamera = cam),
-                              )),
+                          Icon(Icons.filter_list_off, size: 48, color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(height: 12),
+                          Text(_filterCamera != null || _filterClass != null
+                              ? 'No alerts match filters'
+                              : 'All clear',
+                              style: theme.textTheme.titleMedium),
+                          const SizedBox(height: 8),
+                          Text(
+                            _filterCamera != null || _filterClass != null
+                                ? 'Try changing your filter selection.'
+                                : 'When something is detected, alerts appear here instantly.',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
+                          ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                  // Class filter chips
-                  Text('Class', style: theme.textTheme.labelSmall),
-                  const SizedBox(height: 4),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _filterChip('All', _filterClass == null, () {
-                          setState(() => _filterClass = null);
-                        }),
-                        ..._classOptions.map((cls) => _filterChip(
-                              cls,
-                              _filterClass == cls,
-                              () => setState(() => _filterClass = cls),
-                            )),
-                      ],
-                    ),
-                  ),
-                  // Active filter indicator
-                  if (_filterCamera != null || _filterClass != null) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Text(
-                          '${filtered.length} of ${_allAlerts.length} alerts',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.primary),
-                        ),
-                        const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => setState(() {
-                            _filterCamera = null;
-                            _filterClass = null;
-                          }),
-                          child: Text(
-                            'Clear filters',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.error),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          if (_cameraOptions.isNotEmpty || _allAlerts.isNotEmpty)
-            const Divider(height: 1),
-
-          // ── Alert list ──
-          Expanded(
-            child: _allAlerts.isEmpty && _loading
-                ? const Center(child: CircularProgressIndicator())
-                : filtered.isEmpty && !_loading
-                    ? Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.filter_list_off,
-                                size: 48,
-                                color: theme.colorScheme.onSurfaceVariant),
-                            const SizedBox(height: 12),
-                            Text(
-                              _allAlerts.isEmpty
-                                  ? 'All clear'
-                                  : 'No alerts match filters',
-                              style: theme.textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              _allAlerts.isEmpty
-                                  ? 'When something is detected, alerts appear here instantly.'
-                                  : 'Try changing your filter selection.',
-                              textAlign: TextAlign.center,
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant),
-                            ),
-                          ],
-                        ),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: () async {
-                          setState(() {
-                            _page = 1;
-                            _hasMore = true;
-                            _allAlerts = [];
-                          });
-                          await _loadAlerts();
+                    )
+                  : RefreshIndicator(
+                      onRefresh: () async => _loadAlerts(),
+                      child: ListView.builder(
+                        controller: _scrollCtrl,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: _allAlerts.length + (_hasMore ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (index == _allAlerts.length) {
+                            return const Center(
+                              child: Padding(
+                                padding: EdgeInsets.all(16),
+                                child: CircularProgressIndicator(),
+                              ),
+                            );
+                          }
+                          return AlertTile(alert: _allAlerts[index]);
                         },
-                        child: ListView.builder(
-                          controller: _scrollCtrl,
-                          padding: const EdgeInsets.all(16),
-                          itemCount: filtered.length + (_hasMore ? 1 : 0),
-                          itemBuilder: (context, index) {
-                            if (index == filtered.length) {
-                              return const Center(
-                                child: Padding(
-                                  padding: EdgeInsets.all(16),
-                                  child: CircularProgressIndicator(),
-                                ),
-                              );
-                            }
-                            return AlertTile(alert: filtered[index]);
-                          },
-                        ),
                       ),
-          ),
-        ],
-      );
+                    ),
+        ),
+      ],
+    );
   }
 
   Widget _filterChip(String label, bool selected, VoidCallback onTap) {

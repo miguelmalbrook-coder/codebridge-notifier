@@ -36,7 +36,13 @@ class FCMPusher:
             log.warning("FCM_CREDENTIALS not configured")
             return None
         try:
-            return json.loads(raw)
+            # Credentials may be base64-encoded or raw JSON
+            import base64
+            try:
+                decoded = base64.b64decode(raw)
+                return json.loads(decoded)
+            except Exception:
+                return json.loads(raw)
         except Exception as e:
             log.warning("Failed to parse FCM_CREDENTIALS: %s", e)
             return None
@@ -128,7 +134,6 @@ class FCMPusher:
                 "priority": "high",
                 "notification": {
                     "channel_id": "codebridge-alerts",
-                    "priority": "high",
                     "sound": "default",
                 },
             },

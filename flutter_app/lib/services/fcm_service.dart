@@ -24,6 +24,9 @@ class FcmService {
   String registerStatus = 'Not started';
   DateTime? lastAttempt;
 
+  /// Navigation callback — set by the app to navigate on notification tap.
+  void Function(int tabIndex)? onNavigate;
+
   /// Stream that notifies when status changes.
   final statusController = StreamController<String>.broadcast();
   Stream<String> get onStatusChange => statusController.stream;
@@ -46,7 +49,13 @@ class FcmService {
 
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidSettings);
-    await _localNotifications.initialize(initSettings);
+    await _localNotifications.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (details) {
+        // Local notification tapped → go to alerts (tab index 1)
+        onNavigate?.call(1);
+      },
+    );
 
     final androidPlugin = _localNotifications.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
@@ -93,7 +102,22 @@ class FcmService {
 
     // Foreground messages
     FirebaseMessaging.onMessage.listen(_showNotification);
-    FirebaseMessaging.onMessageOpenedApp.listen((m) {});
+
+    // Notification tapped (app in background/killed)
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      debugPrint('FCM notification tapped, navigating to alerts');
+      onNavigate?.call(1); // Tab index 1 = Alerts
+    });
+
+    // Also handle notification that opened the app from killed state
+    final initialMessage = await messaging.getInitialMessage();
+    if (initialMessage != null) {
+      debugPrint('FCM opened app from killed state, navigating to alerts');
+      // Delay to let the app fully initialize
+      Future.delayed(const Duration(seconds: 1), () {
+        onNavigate?.call(1);
+      });
+    }
   }
 
   /// Manual or automatic register — called from Settings button too.
