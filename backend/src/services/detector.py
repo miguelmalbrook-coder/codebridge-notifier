@@ -365,6 +365,10 @@ class DetectorService:
                     self._update_camera_status(cam.db_id, "online")
                 self.latest_frames[cam.alias] = frame
 
+                # Skip detection if YOLO is disabled for this camera
+                if cam.detection_mode == "off":
+                    continue
+
                 # Motion gate — skip YOLO if nothing moves in "motion" mode
                 if cam.detection_mode == "motion":
                     if cam.alias not in self._bg_subtractors:

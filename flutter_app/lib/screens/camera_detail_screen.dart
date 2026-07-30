@@ -66,15 +66,18 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
 
   // ── AR Mode ──────────────────────────────────────
 
+  bool _arBusy = false; // Guard against concurrent requests
+
   void _startArSession() {
     _arOverlay = true;
     _arLoading = true;
     _arFrame = null;
     _arDetections = [];
+    _arBusy = false;
     setState(() {});
     _pollArFrame();
-    // Poll at ~500ms for smooth AR (2 fps is enough for detection display)
-    _arPollTimer = Timer.periodic(const Duration(milliseconds: 500), (_) => _pollArFrame());
+    // Poll every 2s — detect takes ~1.5s, no need to stack up
+    _arPollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollArFrame());
   }
 
   void _stopArSession() {
@@ -83,17 +86,18 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     _arPollTimer = null;
     _arFrame = null;
     _arDetections = [];
+    _arBusy = false;
     setState(() {});
   }
 
   Future<void> _pollArFrame() async {
-    if (!_arOverlay || !mounted) return;
-
+    if (!_arOverlay || !mounted || _arBusy) return;
+    _arBusy = true;
     try {
       final url = '$_backendUrl/api/cameras/${widget.cameraId}/detect';
       final resp = await http.get(
         Uri.parse(url),
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 8));
 
       if (resp.statusCode == 200 && mounted) {
         // Parse detections from header
@@ -115,7 +119,10 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
         setState(() => _arLoading = true);
       }
     } catch (e) {
-      // Silently retry on next tick
+      debugPrint('AR poll error: $e');
+      // Keep showing existing frame if we have one, just retry next tick
+    } finally {
+      _arBusy = false;
     }
   }
 

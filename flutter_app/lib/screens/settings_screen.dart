@@ -285,34 +285,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final alias = cam['alias'] as String? ?? 'Unknown';
     final displayConf = (conf * 100).toStringAsFixed(0);
 
+    final isOff = mode == 'off';
+
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: ExpansionTile(
         leading: Icon(
-          mode == 'yolo' ? Icons.smart_toy : Icons.motion_photos_on,
-          color: theme.colorScheme.primary,
+          isOff ? Icons.power_settings_new : (mode == 'yolo' ? Icons.smart_toy : Icons.motion_photos_on),
+          color: isOff ? Colors.grey : theme.colorScheme.primary,
         ),
-        title: Text(alias, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text('$mode · ${displayConf}% · ${targets.join(", ")}',
-            style: theme.textTheme.bodySmall),
+        title: Text(alias, style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: isOff ? Colors.grey : null,
+        )),
+        subtitle: Text(isOff ? 'Detection OFF' : '$mode · ${displayConf}% · ${targets.join(", ")}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: isOff ? Colors.grey : null,
+            )),
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Mode
-                _label('Detection Mode', theme),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'yolo', label: Text('YOLO')),
-                    ButtonSegment(value: 'motion', label: Text('Motion')),
-                  ],
-                  selected: {mode},
-                  onSelectionChanged: (v) => _saveCameraSetting(camId, 'detection_mode', v.first),
+                // ── Master toggle ──
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(isOff ? 'YOLO Detection: OFF' : 'YOLO Detection: ON',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: isOff ? Colors.red : Colors.green,
+                    )),
+                  subtitle: Text(isOff ? 'No detections will fire for this camera' : 'Detections active'),
+                  value: !isOff,
+                  onChanged: (v) {
+                    _saveCameraSetting(camId, 'detection_mode', v ? 'yolo' : 'off');
+                  },
                 ),
+                const Divider(),
+                const SizedBox(height: 8),
+
+                // Mode (only when ON)
+                if (!isOff) ...[
+                  _label('Detection Mode', theme),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'yolo', label: Text('YOLO')),
+                      ButtonSegment(value: 'motion', label: Text('Motion')),
+                    ],
+                    selected: {mode},
+                    onSelectionChanged: (v) => _saveCameraSetting(camId, 'detection_mode', v.first),
+                  ),
+                ],
                 const SizedBox(height: 16),
 
+                // ── YOLO-specific settings (hidden when OFF) ──
+                if (!isOff) ...[
                 // Model
                 _label('YOLO Model', theme),
                 DropdownButtonFormField<String>(
@@ -464,7 +492,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       );
                     }).toList(),
                   ),
-                ],
+                ], // end if (!isOff)
               ],
             ),
           ),

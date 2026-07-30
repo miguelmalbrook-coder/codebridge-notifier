@@ -156,7 +156,7 @@ async def camera_snapshot(alias: str):
     return Response(content=jpeg.tobytes(), media_type="image/jpeg")
 
 
-@app.post("/api/cameras/{camera_id}/detect")
+@app.get("/api/cameras/{camera_id}/detect")
 async def detect_frame(camera_id: str):
     """Run YOLO on-demand for AR mode. Returns annotated JPEG + detections list.
     
