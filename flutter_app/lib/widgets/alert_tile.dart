@@ -14,10 +14,14 @@ class AlertTile extends StatelessWidget {
     final icon = _iconForClass(alert.className);
     final color = _colorForClass(alert.className);
 
-    // Build snapshot URL from relative path
+    // Build snapshot URL from relative path (with cache-busting)
     final hasSnapshot = alert.snapshotUrl.isNotEmpty;
-    final fullSnapUrl =
+    final snapBase =
         hasSnapshot ? BackendConfig.snapshotUrl(alert.snapshotUrl) : null;
+    // Add cache-busting param so thumbnails refresh on each rebuild
+    final fullSnapUrl = snapBase != null
+        ? '$snapBase&_cb=${alert.seenAt.millisecondsSinceEpoch}'
+        : null;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -52,10 +56,21 @@ class AlertTile extends StatelessWidget {
                     ],
                   ),
                 ),
-                Text(
-                  _formatTime(alert.seenAt),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      _formatRelative(alert.seenAt),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500),
+                    ),
+                    Text(
+                      _formatAbsolute(alert.seenAt),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -146,12 +161,21 @@ class AlertTile extends StatelessWidget {
     }
   }
 
-  String _formatTime(DateTime dt) {
+  String _formatRelative(DateTime dt) {
     final now = DateTime.now();
     final diff = now.difference(dt);
     if (diff.inMinutes < 1) return 'just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     return '${diff.inDays}d ago';
+  }
+
+  String _formatAbsolute(DateTime dt) {
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final mo = dt.month.toString().padLeft(2, '0');
+    final y = dt.year.toString().substring(2);
+    return '${h}:${m}hrs on $d.$mo.$y';
   }
 }

@@ -99,6 +99,7 @@ class DetectorService:
 
     def __init__(self):
         self._running = False
+        self._paused = False
         self._thread: threading.Thread | None = None
         self._model_cache: dict[str, YOLO] = {}  # model_name -> loaded model
         self._camera_statuses: dict[str, str] = {}
@@ -111,6 +112,20 @@ class DetectorService:
         self._last_rel_path = ""
         self._last_full_path = None
         self._last_snapshot_camera = ""
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def pause(self):
+        """Temporarily pause detection (keeps thread alive, stops processing)."""
+        self._paused = True
+        log.info("Detector PAUSED by user")
+
+    def resume(self):
+        """Resume detection after pause."""
+        self._paused = False
+        log.info("Detector RESUMED by user")
 
     def start(self) -> threading.Thread:
         self._running = True
@@ -229,6 +244,78 @@ class DetectorService:
         """
         return settings.supabase_anon_key
 
+    def detect_single(self, camera_alias: str, targets: list[str] | None = None) -> dict | None:
+        """Run YOLO on a single frame and return annotated JPEG bytes + detections.
+        
+        Used by the AR endpoint for on-demand detection.
+        Returns {"image": bytes, "detections": list[dict]} or None if no frame.
+        """
+        if camera_alias not in self.latest_frames:
+            return None
+
+        frame = self.latest_frames[camera_alias]
+        
+        # Find the camera config to get model info
+        cam_config = None
+        for cam in self._load_cameras_from_db():
+            if cam.alias == camera_alias:
+                cam_config = cam
+                break
+        
+        model_name = cam_config.model if cam_config else DEFAULT_MODEL
+        model = self._load_model(model_name)
+        if model is None:
+            return None
+
+        target_set = set(targets) if targets else None
+        min_conf = 0.2  # Low threshold for AR — user filters visually
+
+        try:
+            results = model(frame, conf=min_conf, verbose=False)
+        except Exception as e:
+            log.error("AR detection error on %s: %s", camera_alias, e)
+            return None
+
+        # Annotate frame
+        annotated = frame.copy()
+        detections = []
+        if results and results[0].boxes is not None:
+            for box in results[0].boxes:
+                class_id = int(box.cls[0].item())
+                confidence = float(box.conf[0].item())
+                class_name = results[0].names[class_id].lower()
+                
+                # Only draw boxes for target classes
+                if target_set and class_name not in target_set:
+                    continue
+
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                color_map = {
+                    'person': (255, 200, 0), 'car': (0, 165, 255),
+                    'cat': (200, 0, 200), 'dog': (0, 200, 0),
+                    'truck': (0, 0, 255), 'bus': (0, 180, 180),
+                    'motorcycle': (200, 100, 200), 'bicycle': (150, 50, 200),
+                }
+                color = color_map.get(class_name, (128, 128, 128))
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+                label = f"{class_name} {confidence:.0%}"
+                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+                cv2.putText(annotated, label, (x1 + 2, y1 - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                detections.append({
+                    "class": class_name,
+                    "confidence": round(confidence, 3),
+                    "bbox": [x1, y1, x2, y2],
+                })
+
+        # Encode to JPEG
+        ret, jpeg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ret:
+            return None
+
+        return {"image": jpeg.tobytes(), "detections": detections}
+
     def _run(self):
         log.info("Detector thread started")
 
@@ -236,6 +323,11 @@ class DetectorService:
         last_refresh = 0.0
 
         while self._running:
+            # If paused, just sleep and skip all processing
+            if self._paused:
+                time.sleep(1)
+                continue
+
             now = time.monotonic()
 
             if now - last_refresh > CAMERA_REFRESH_INTERVAL:

@@ -9,6 +9,7 @@ import '../config.dart';
 import '../supabase/client.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/fcm_service.dart';
+import '../services/monitoring_service.dart';
 import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -28,6 +29,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _appVersion = '';
   StreamSubscription? _fcmSub;
   String _fcmStatus = '';
+
+  // Local slider state for smooth dragging (key = "cameraId_field")
+  final Map<String, double> _localSliderValues = {};
 
   @override
   void initState() {
@@ -154,6 +158,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ..._cameras.map((cam) => _cameraCard(cam, theme)),
                 const SizedBox(height: 24),
 
+                // ── Monitoring Toggle ──
+                ListenableBuilder(
+                  listenable: MonitoringService().isActive,
+                  builder: (context, _) {
+                    final isOn = MonitoringService().isMonitoring;
+                    return Card(
+                      child: SwitchListTile(
+                        secondary: Icon(
+                          isOn ? Icons.monitor : Icons.pause_circle_outline,
+                          color: isOn ? Colors.green : Colors.red,
+                        ),
+                        title: Text(
+                          'Monitoring',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: isOn ? null : Colors.red,
+                          ),
+                        ),
+                        subtitle: Text(
+                          isOn ? 'YOLO detection is active' : 'Paused — no alerts will be sent',
+                          style: TextStyle(
+                            color: isOn ? theme.colorScheme.onSurfaceVariant : Colors.red,
+                          ),
+                        ),
+                        value: isOn,
+                        onChanged: (val) async {
+                          if (val) {
+                            await MonitoringService().resume();
+                          } else {
+                            await MonitoringService().pause();
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+
                 // Connection
                 Card(
                   child: Padding(
@@ -279,8 +321,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
                 Slider(
-                  value: cooldown.toDouble(), min: 1, max: 120, divisions: 119,
-                  onChanged: (v) => _saveCameraSetting(camId, 'cooldown_seconds', v.round()),
+                  value: (_localSliderValues['${camId}_cooldown'] ?? cooldown.toDouble()),
+                  min: 1, max: 120, divisions: 119,
+                  onChanged: (v) {
+                    setState(() => _localSliderValues['${camId}_cooldown'] = v);
+                  },
+                  onChangeEnd: (v) {
+                    _localSliderValues.remove('${camId}_cooldown');
+                    _saveCameraSetting(camId, 'cooldown_seconds', v.round());
+                  },
                 ),
 
                 // Motion sensitivity (only relevant in motion mode)
@@ -294,8 +343,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                   Slider(
-                    value: motionSensitivity, min: 0.0001, max: 0.01, divisions: 99,
-                    onChanged: (v) => _saveCameraSetting(camId, 'motion_sensitivity', double.parse(v.toStringAsFixed(4))),
+                    value: (_localSliderValues['${camId}_motion'] ?? motionSensitivity),
+                    min: 0.0001, max: 0.01, divisions: 99,
+                    onChanged: (v) {
+                      setState(() => _localSliderValues['${camId}_motion'] = v);
+                    },
+                    onChangeEnd: (v) {
+                      _localSliderValues.remove('${camId}_motion');
+                      _saveCameraSetting(camId, 'motion_sensitivity', double.parse(v.toStringAsFixed(4)));
+                    },
                   ),
                   Text('Lower = more sensitive', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
                   const SizedBox(height: 8),
@@ -340,15 +396,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Slider(
-                                value: currentConf,
+                                value: (_localSliderValues['${camId}_conf_$t'] ?? currentConf),
                                 min: 0.05,
                                 max: 0.95,
                                 divisions: 18,
-                                label: '$pct%',
+                                label: '${(_localSliderValues['${camId}_conf_$t'] ?? currentConf) * 100 ~/ 1}%',
                                 onChanged: (v) {
-                                  // Live visual update only — saves on drag end
+                                  setState(() => _localSliderValues['${camId}_conf_$t'] = v);
                                 },
                                 onChangeEnd: (v) {
+                                  _localSliderValues.remove('${camId}_conf_$t');
                                   final newConfs = Map<String, double>.from(classConfs);
                                   newConfs[t] = double.parse(v.toStringAsFixed(2));
                                   _saveCameraSetting(camId, 'class_confidences', newConfs);
@@ -358,7 +415,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             SizedBox(
                               width: 36,
                               child: Text(
-                                '$pct%',
+                                '${((_localSliderValues['${camId}_conf_$t'] ?? currentConf) * 100).round()}%',
                                 textAlign: TextAlign.right,
                                 style: theme.textTheme.labelMedium?.copyWith(
                                   color: theme.colorScheme.primary,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 
@@ -57,7 +58,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Codebridge Notifier API",
-    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -84,7 +84,6 @@ async def health():
     return {
         "status": "ok",
         "cameras": cam_count,
-        "version": "0.3.0",
     }
 
 
@@ -100,14 +99,39 @@ async def get_config():
         return {
             "tunnel_url": data.get("tunnel_url", ""),
             "subscribed": data.get("subscribed", False),
-            "version": "0.3.0",
         }
     except Exception:
         return {
             "tunnel_url": "",
             "subscribed": False,
-            "version": "0.3.0",
         }
+
+
+@app.get("/api/monitoring/status")
+async def monitoring_status():
+    """Check if monitoring (YOLO detection) is active or paused."""
+    paused = _detector.is_paused if _detector else True
+    return {"paused": paused}
+
+
+@app.post("/api/monitoring/pause")
+async def monitoring_pause():
+    """Pause YOLO detection (keeps server running, stops alerting)."""
+    if _detector is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Detector not running")
+    _detector.pause()
+    return {"status": "paused"}
+
+
+@app.post("/api/monitoring/resume")
+async def monitoring_resume():
+    """Resume YOLO detection after pause."""
+    if _detector is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Detector not running")
+    _detector.resume()
+    return {"status": "resumed"}
 
 
 @app.get("/api/cameras/{alias}/snapshot")
@@ -130,6 +154,48 @@ async def camera_snapshot(alias: str):
         raise HTTPException(status_code=500, detail="Failed to encode frame")
 
     return Response(content=jpeg.tobytes(), media_type="image/jpeg")
+
+
+@app.post("/api/cameras/{camera_id}/detect")
+async def detect_frame(camera_id: str, body: dict = {}):
+    """Run YOLO on-demand for AR mode. Returns annotated JPEG + detections list.
+    
+    Body: {"targets": ["person", "car"]} — which classes to show.
+    """
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+    from src.auth import verify_token
+    from src.db import get_db
+
+    # Auth check
+    # (extract token from header manually for POST)
+    # For simplicity, this endpoint is semi-public like the snapshot endpoint
+    
+    # Resolve camera alias from ID
+    try:
+        db = get_db()
+        result = db.table("cameras").select("alias").eq("id", camera_id).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        alias = result.data[0]["alias"]
+    except HTTPException:
+        raise
+    except Exception:
+        alias = camera_id  # Fallback: treat as alias directly
+
+    if _detector is None:
+        raise HTTPException(status_code=503, detail="Detector not running")
+
+    targets = body.get("targets", None)
+    result = _detector.detect_single(alias, targets=targets)
+    if result is None:
+        raise HTTPException(status_code=404, detail="No frame available")
+
+    return Response(
+        content=result["image"],
+        media_type="image/jpeg",
+        headers={"X-Detections": json.dumps(result["detections"])},
+    )
 
 
 @app.get("/app-release.apk")

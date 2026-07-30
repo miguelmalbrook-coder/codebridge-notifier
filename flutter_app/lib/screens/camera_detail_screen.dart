@@ -1,12 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../supabase/client.dart';
 
-/// Camera live view with AR overlay toggle and interactive heatmap.
+/// Camera live view with real-time YOLO AR overlay and interactive heatmap.
 class CameraDetailScreen extends StatefulWidget {
   final String cameraAlias;
   final String cameraId;
@@ -26,8 +27,14 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
   bool _showHeatmap = false;
   Map<String, dynamic>? _heatmapData;
 
-  String? get _sessionToken => supabase.auth.currentSession?.accessToken;
+  // AR session state
+  Timer? _arPollTimer;
+  Uint8List? _arFrame;
+  List<Map<String, dynamic>> _arDetections = [];
+  bool _arLoading = false;
+  Set<String> _arTargets = {'person', 'car', 'cat', 'dog'};
 
+  static const _allClasses = ['person', 'car', 'cat', 'dog', 'truck', 'bus', 'motorcycle', 'bicycle'];
   static const _classColors = {
     'person': Colors.blue,
     'car': Colors.orange,
@@ -39,11 +46,13 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     'bicycle': Colors.indigo,
   };
 
+  String? get _sessionToken => supabase.auth.currentSession?.accessToken;
+
   @override
   void initState() {
     super.initState();
     _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (mounted) setState(() => _refreshKey++);
+      if (mounted && !_arOverlay) setState(() => _refreshKey++);
     });
     _loadHeatmap();
   }
@@ -51,15 +60,82 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _arPollTimer?.cancel();
     super.dispose();
   }
 
+  // ── AR Mode ──────────────────────────────────────
+
+  void _startArSession() {
+    _arOverlay = true;
+    _arLoading = true;
+    _arFrame = null;
+    _arDetections = [];
+    setState(() {});
+    _pollArFrame();
+    // Poll at ~500ms for smooth AR (2 fps is enough for detection display)
+    _arPollTimer = Timer.periodic(const Duration(milliseconds: 500), (_) => _pollArFrame());
+  }
+
+  void _stopArSession() {
+    _arOverlay = false;
+    _arPollTimer?.cancel();
+    _arPollTimer = null;
+    _arFrame = null;
+    _arDetections = [];
+    setState(() {});
+  }
+
+  Future<void> _pollArFrame() async {
+    if (!_arOverlay || !mounted) return;
+
+    try {
+      final url = '$_backendUrl/api/cameras/${widget.cameraId}/detect';
+      final resp = await http.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'targets': _arTargets.toList()}),
+      ).timeout(const Duration(seconds: 3));
+
+      if (resp.statusCode == 200 && mounted) {
+        // Parse detections from header
+        final detHeader = resp.headers['x-detections'];
+        List<Map<String, dynamic>> dets = [];
+        if (detHeader != null) {
+          final decoded = jsonDecode(detHeader) as List;
+          dets = decoded.cast<Map<String, dynamic>>();
+        }
+        setState(() {
+          _arFrame = resp.bodyBytes;
+          _arDetections = dets;
+          _arLoading = false;
+        });
+      } else if (mounted && resp.statusCode == 404) {
+        // No frame yet — keep loading
+        setState(() => _arLoading = true);
+      }
+    } catch (e) {
+      // Silently retry on next tick
+    }
+  }
+
+  void _toggleArClass(String cls) {
+    setState(() {
+      if (_arTargets.contains(cls)) {
+        _arTargets.remove(cls);
+      } else {
+        _arTargets.add(cls);
+      }
+    });
+    // Immediately poll with new targets
+    _pollArFrame();
+  }
+
+  // ── Heatmap ──────────────────────────────────────
+
   String get _imageUrl {
     final token = _sessionToken ?? '';
-    if (_arOverlay) {
-      return '$_backendUrl/api/cameras/${widget.cameraId}/annotated?token=$token&t=$_refreshKey';
-    }
-    return '$_backendUrl/api/cameras/${widget.cameraAlias}/snapshot?t=$_refreshKey';
+    return '$_backendUrl/api/cameras/${widget.cameraAlias}/snapshot?token=$token&t=$_refreshKey';
   }
 
   Future<void> _loadHeatmap() async {
@@ -80,7 +156,6 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
   }
 
   void _showAlertsForHour(int hour, String? selectedClass) {
-    // Show a dialog or navigate to alerts filtered by hour
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -95,6 +170,8 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     );
   }
 
+  // ── Build ────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -105,8 +182,14 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
           IconButton(
             icon: Icon(_arOverlay ? Icons.smart_toy : Icons.smart_toy_outlined),
             color: _arOverlay ? Colors.amber : null,
-            tooltip: 'AR Overlay',
-            onPressed: () => setState(() => _arOverlay = !_arOverlay),
+            tooltip: 'AR Detection',
+            onPressed: () {
+              if (_arOverlay) {
+                _stopArSession();
+              } else {
+                _startArSession();
+              }
+            },
           ),
           IconButton(
             icon: Icon(_showHeatmap ? Icons.map : Icons.map_outlined),
@@ -119,70 +202,189 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        child: Column(
-          children: [
-            // Live view
-            Stack(
-              children: [
-                Container(
-                  height: 300,
-                  width: double.infinity,
-                  color: theme.colorScheme.surfaceContainerHighest,
-                  child: Image.network(
-                    _imageUrl,
-                    fit: BoxFit.cover,
-                    headers: _arOverlay ? {} : null,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return const Center(child: CircularProgressIndicator());
-                    },
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.videocam_off, size: 48, color: Colors.grey),
-                            SizedBox(height: 8),
-                            Text('Camera offline', style: TextStyle(color: Colors.grey)),
-                          ],
+      body: Column(
+        children: [
+          // ── Live view / AR view ──
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  Stack(
+                    children: [
+                      Container(
+                        height: 300,
+                        width: double.infinity,
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        child: _arOverlay ? _buildArView(theme) : _buildSnapshotView(theme),
+                      ),
+                      if (_arOverlay)
+                        Positioned(
+                          top: 8,
+                          left: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withOpacity(0.9),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.smart_toy, size: 14, color: Colors.black),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'AR · ${_arDetections.length} detected',
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      );
-                    },
+                    ],
                   ),
-                ),
-                if (_arOverlay)
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.withOpacity(0.9),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.smart_toy, size: 14, color: Colors.black),
-                          SizedBox(width: 4),
-                          Text('AR', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black)),
-                        ],
-                      ),
+
+                  // ── AR class toggle buttons ──
+                  if (_arOverlay) _buildArClassBar(theme),
+
+                  // ── Heatmap ──
+                  if (_showHeatmap)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: _buildHeatmap(theme),
                     ),
-                  ),
-              ],
-            ),
-            // Heatmap
-            if (_showHeatmap)
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: _buildHeatmap(theme),
+                ],
               ),
-          ],
-        ),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildSnapshotView(ThemeData theme) {
+    return Image.network(
+      _imageUrl,
+      fit: BoxFit.cover,
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return const Center(child: CircularProgressIndicator());
+      },
+      errorBuilder: (context, error, stackTrace) {
+        return const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.videocam_off, size: 48, color: Colors.grey),
+              SizedBox(height: 8),
+              Text('Camera offline', style: TextStyle(color: Colors.grey)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildArView(ThemeData theme) {
+    if (_arLoading && _arFrame == null) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: Colors.amber),
+            SizedBox(height: 12),
+            Text('Starting AR detection...', style: TextStyle(color: Colors.amber)),
+          ],
+        ),
+      );
+    }
+
+    if (_arFrame != null) {
+      return Image.memory(
+        _arFrame!,
+        fit: BoxFit.cover,
+        gaplessPlayback: true, // Prevents flicker between frames
+      );
+    }
+
+    // Fallback: show live snapshot while waiting
+    return Image.network(
+      _imageUrl,
+      fit: BoxFit.cover,
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return const Center(child: CircularProgressIndicator(color: Colors.amber));
+      },
+      errorBuilder: (context, error, stackTrace) {
+        return const Center(
+          child: Icon(Icons.videocam_off, size: 48, color: Colors.grey),
+        );
+      },
+    );
+  }
+
+  Widget _buildArClassBar(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.8),
+        border: Border(top: BorderSide(color: theme.colorScheme.outline.withOpacity(0.3))),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Detection Classes',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: _allClasses.map((cls) {
+              final isActive = _arTargets.contains(cls);
+              final color = _classColors[cls] ?? Colors.grey;
+              return FilterChip(
+                label: Text(cls, style: TextStyle(
+                  fontSize: 12,
+                  color: isActive ? Colors.white : color,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                )),
+                selected: isActive,
+                onSelected: (_) => _toggleArClass(cls),
+                selectedColor: color,
+                checkmarkColor: Colors.white,
+                avatar: isActive
+                    ? null
+                    : Icon(_iconForClass(cls), size: 16, color: color),
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Tap to toggle · ${_arTargets.length} active',
+            style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _iconForClass(String cls) {
+    switch (cls) {
+      case 'person': return Icons.person;
+      case 'car': return Icons.directions_car;
+      case 'cat': case 'dog': return Icons.pets;
+      case 'truck': return Icons.local_shipping;
+      case 'bus': return Icons.directions_bus;
+      case 'motorcycle': return Icons.two_wheeler;
+      case 'bicycle': return Icons.pedal_bike;
+      default: return Icons.help_outline;
+    }
   }
 
   Widget _buildHeatmap(ThemeData theme) {
@@ -213,7 +415,6 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
       );
     }
 
-    // Find global max
     int maxCount = 0;
     for (final cls in classes) {
       final classData = List<Map<String, dynamic>>.from(heatmap[cls] ?? []);
@@ -239,7 +440,6 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            // Legend
             Wrap(
               spacing: 12,
               runSpacing: 4,
@@ -256,13 +456,11 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
               }).toList(),
             ),
             const SizedBox(height: 16),
-            // Interactive bar chart
             SizedBox(
               height: 160,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: List.generate(24, (hour) {
-                  // Calculate total for this hour
                   int hourTotal = 0;
                   for (final cls in classes) {
                     final classData = List<Map<String, dynamic>>.from(heatmap[cls] ?? []);
@@ -279,7 +477,6 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          // Stacked bars
                           Container(
                             height: height.clamp(4, 120),
                             margin: const EdgeInsets.symmetric(horizontal: 1),
@@ -309,7 +506,6 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            // Per-class breakdown with tap
             Text('Tap a bar to see screenshots', style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey)),
             const SizedBox(height: 8),
             ...classes.map((cls) {
@@ -405,7 +601,6 @@ class _AlertsForHourSheetState extends State<_AlertsForHourSheet> {
           ),
           child: Column(
             children: [
-              // Handle
               Container(
                 margin: const EdgeInsets.only(top: 8),
                 width: 40,
@@ -441,7 +636,6 @@ class _AlertsForHourSheetState extends State<_AlertsForHourSheet> {
                               final className = alert['class_name'] ?? 'unknown';
                               final confidence = alert['confidence'] ?? 0;
                               final seenAt = alert['seen_at'] ?? '';
-                              final snapshotUrl = alert['snapshot_url'] ?? '';
 
                               return ListTile(
                                 leading: CircleAvatar(
