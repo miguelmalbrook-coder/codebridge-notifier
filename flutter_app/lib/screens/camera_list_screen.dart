@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../supabase/client.dart';
+import '../utils/error_utils.dart';
 import '../models/camera.dart';
 import '../widgets/camera_card.dart';
 import '../widgets/camera_edit_dialog.dart';
@@ -38,7 +39,7 @@ class _CameraListScreenState extends State<CameraListScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to load cameras: $e'),
+            content: Text(friendlyError(e)),
             backgroundColor: Colors.red,
           ),
         );
@@ -83,7 +84,7 @@ class _CameraListScreenState extends State<CameraListScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to add camera: $e'),
+            content: Text(friendlyError(e)),
             backgroundColor: Colors.red,
           ),
         );

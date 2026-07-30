@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../auth/auth_service.dart';
 import '../config.dart';
 import '../supabase/client.dart';
+import '../utils/error_utils.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/fcm_service.dart';
 import '../services/monitoring_service.dart';
@@ -120,7 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
         );
       }
     }

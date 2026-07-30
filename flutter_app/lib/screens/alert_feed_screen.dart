@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../supabase/client.dart';
+import '../utils/error_utils.dart';
 import '../models/alert.dart';
 import '../widgets/alert_tile.dart';
 
@@ -110,7 +111,7 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
       if (mounted) {
         setState(() => _loading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load alerts: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text(friendlyError(e)), backgroundColor: Colors.red),
         );
       }
     }
