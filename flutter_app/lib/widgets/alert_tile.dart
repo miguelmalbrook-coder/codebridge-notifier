@@ -163,7 +163,9 @@ class AlertTile extends StatelessWidget {
 
   String _formatRelative(DateTime dt) {
     final now = DateTime.now();
-    final diff = now.difference(dt);
+    final local = dt.isUtc ? dt.toLocal() : dt;
+    final diff = now.difference(local);
+    if (diff.isNegative) return 'just now';
     if (diff.inMinutes < 1) return 'just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
@@ -171,11 +173,12 @@ class AlertTile extends StatelessWidget {
   }
 
   String _formatAbsolute(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    final d = dt.day.toString().padLeft(2, '0');
-    final mo = dt.month.toString().padLeft(2, '0');
-    final y = dt.year.toString().substring(2);
+    final local = dt.isUtc ? dt.toLocal() : dt;
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final mo = local.month.toString().padLeft(2, '0');
+    final y = local.year.toString().substring(2);
     return '${h}:${m}hrs on $d.$mo.$y';
   }
 }

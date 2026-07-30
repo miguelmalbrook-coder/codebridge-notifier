@@ -747,6 +747,16 @@ class _AlertsForHourSheetState extends State<_AlertsForHourSheet> {
                               final className = alert['class_name'] ?? 'unknown';
                               final confidence = alert['confidence'] ?? 0;
                               final seenAt = alert['seen_at'] ?? '';
+                              String timeStr = '';
+                              if (seenAt is String && seenAt.length > 19) {
+                                try {
+                                  final dt = DateTime.parse(seenAt);
+                                  final local = dt.isUtc ? dt.toLocal() : dt;
+                                  timeStr = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+                                } catch (_) {
+                                  timeStr = seenAt.substring(11, 19);
+                                }
+                              }
 
                               return ListTile(
                                 leading: CircleAvatar(
@@ -754,7 +764,7 @@ class _AlertsForHourSheetState extends State<_AlertsForHourSheet> {
                                   child: Text(className[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontSize: 12)),
                                 ),
                                 title: Text('${className.toString().toUpperCase()} · ${(confidence * 100).toInt()}%'),
-                                subtitle: Text(seenAt.length > 19 ? seenAt.substring(11, 19) : seenAt),
+                                subtitle: Text(timeStr),
                               );
                             },
                           ),
