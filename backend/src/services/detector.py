@@ -78,7 +78,21 @@ class CameraConfig:
         self.targets = row.get("targets") or ["person", "car", "cat", "dog"]
         self.motion_sensitivity = float(row.get("motion_sensitivity") or DEFAULT_MOTION_SENSITIVITY)
         # Per-class confidence: dict like {"car": 0.3, "person": 0.6}
-        self.class_confidences = (row.get("class_confidences") or {}) if isinstance(row.get("class_confidences"), dict) else {}
+        # Robust parsing: handle dict, str (JSON), None, or missing
+        raw_cc = row.get("class_confidences")
+        if isinstance(raw_cc, dict):
+            self.class_confidences = {k: float(v) for k, v in raw_cc.items()}
+        elif isinstance(raw_cc, str) and raw_cc.strip():
+            try:
+                import json as _json
+                parsed = _json.loads(raw_cc)
+                self.class_confidences = {k: float(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
+            except Exception:
+                self.class_confidences = {}
+        else:
+            self.class_confidences = {}
+        if self.class_confidences:
+            log.debug("Camera %s class_confidences: %s", self.alias, self.class_confidences)
 
     @classmethod
     def from_db_row(cls, row: dict) -> CameraConfig | None:
@@ -112,6 +126,7 @@ class DetectorService:
         self._last_rel_path = ""
         self._last_full_path = None
         self._last_snapshot_camera = ""
+        self._camera_configs: dict[str, CameraConfig] = {}  # alias -> CameraConfig
 
     @property
     def is_paused(self) -> bool:
@@ -255,12 +270,8 @@ class DetectorService:
 
         frame = self.latest_frames[camera_alias]
         
-        # Find the camera config to get model info
-        cam_config = None
-        for cam in self._load_cameras_from_db():
-            if cam.alias == camera_alias:
-                cam_config = cam
-                break
+        # Find the camera config to get model info (use cache, not DB)
+        cam_config = self._camera_configs.get(camera_alias)
         
         model_name = cam_config.model if cam_config else DEFAULT_MODEL
         model = self._load_model(model_name)
@@ -333,6 +344,8 @@ class DetectorService:
             if now - last_refresh > CAMERA_REFRESH_INTERVAL:
                 cameras = self._load_cameras_from_db()
                 last_refresh = now
+                # Cache configs for AR endpoint
+                self._camera_configs = {c.alias: c for c in cameras}
 
             if not cameras:
                 time.sleep(5)
@@ -411,6 +424,7 @@ class DetectorService:
             # Per-class confidence check
             class_conf = cam.class_confidences.get(class_name)
             if class_conf is not None and confidence < class_conf:
+                log.debug("FILTERED [%s] %s @ %.2f < %.2f threshold", cam.alias, class_name, confidence, class_conf)
                 continue
 
             if not self._gate.can_alert(cam.alias, class_name, cam.cooldown):

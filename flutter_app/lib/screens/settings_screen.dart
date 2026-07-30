@@ -63,14 +63,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadAll() async {
     setState(() => _loading = true);
-    await Future.wait([_loadMeta(), _loadCameras()]);
+    // Load cameras from Supabase (fast, direct connection)
+    await _loadCameras();
     if (mounted) setState(() => _loading = false);
+    // Load metadata from backend in background (may be slow through tunnel)
+    _loadMeta();
   }
 
   Future<void> _loadMeta() async {
     try {
-      final res = await http.get(Uri.parse('${BackendConfig.baseUrl}/api/settings'));
-      if (res.statusCode == 200) {
+      final res = await http.get(Uri.parse('${BackendConfig.baseUrl}/api/settings'))
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode == 200 && mounted) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         setState(() {
           _availableModels = (data['available_models'] as List<dynamic>?)?.cast<String>() ?? [];
@@ -79,6 +83,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (e) {
       debugPrint('Failed to load meta: $e');
+      // Set defaults if backend is unreachable
+      if (mounted && _availableModels.isEmpty) {
+        setState(() {
+          _availableModels = ['yolo11n.pt', 'yolo11s.pt', 'yolo11m.pt', 'yolo11l.pt', 'yolo11x.pt'];
+          _availableTargets = ['person', 'car', 'cat', 'dog', 'truck', 'bus', 'motorcycle', 'bicycle'];
+        });
+      }
     }
   }
 

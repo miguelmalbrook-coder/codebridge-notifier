@@ -91,11 +91,9 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
 
     try {
       final url = '$_backendUrl/api/cameras/${widget.cameraId}/detect';
-      final resp = await http.post(
+      final resp = await http.get(
         Uri.parse(url),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'targets': _arTargets.toList()}),
-      ).timeout(const Duration(seconds: 3));
+      ).timeout(const Duration(seconds: 5));
 
       if (resp.statusCode == 200 && mounted) {
         // Parse detections from header
@@ -105,9 +103,11 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
           final decoded = jsonDecode(detHeader) as List;
           dets = decoded.cast<Map<String, dynamic>>();
         }
+        // Filter by selected classes (client-side)
+        final filtered = dets.where((d) => _arTargets.contains(d['class'])).toList();
         setState(() {
           _arFrame = resp.bodyBytes;
-          _arDetections = dets;
+          _arDetections = filtered;
           _arLoading = false;
         });
       } else if (mounted && resp.statusCode == 404) {
@@ -403,21 +403,31 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
           child: Column(
             children: [
               Row(children: [
-                const Icon(Icons.bar_chart, size: 20),
+                const Icon(Icons.insights, size: 20),
                 const SizedBox(width: 8),
                 Text('Activity (24h)', style: theme.textTheme.titleMedium),
               ]),
-              const SizedBox(height: 16),
-              const Text('No detections yet', style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 20),
+              Icon(Icons.hourglass_empty, size: 40, color: theme.colorScheme.onSurfaceVariant.withOpacity(0.4)),
+              const SizedBox(height: 12),
+              Text('No detections yet', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              const SizedBox(height: 4),
+              Text('Detections will appear here once YOLO starts finding objects.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant.withOpacity(0.6))),
             ],
           ),
         ),
       );
     }
 
+    // Calculate per-class totals and max
     int maxCount = 0;
+    final Map<String, int> classTotals = {};
     for (final cls in classes) {
       final classData = List<Map<String, dynamic>>.from(heatmap[cls] ?? []);
+      final clsTotal = classData.fold<int>(0, (sum, h) => sum + (h['count'] as int));
+      classTotals[cls] = clsTotal;
       for (final h in classData) {
         final count = h['count'] as int;
         if (count > maxCount) maxCount = count;
@@ -425,108 +435,202 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     }
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Header ──
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer.withOpacity(0.3),
+            ),
+            child: Row(
               children: [
-                const Icon(Icons.bar_chart, size: 20),
+                Icon(Icons.insights, size: 20, color: theme.colorScheme.primary),
                 const SizedBox(width: 8),
-                Text('Activity (24h)', style: theme.textTheme.titleMedium),
+                Text('Activity (24h)', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
                 const Spacer(),
-                Text('$total detections', style: theme.textTheme.bodySmall),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text('$total', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
               ],
             ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 4,
-              children: classes.map((cls) {
-                final color = _classColors[cls] ?? Colors.grey;
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(width: 12, height: 12, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
-                    const SizedBox(width: 4),
-                    Text(cls, style: const TextStyle(fontSize: 12)),
-                  ],
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 160,
+          ),
+
+          // ── Stacked bar chart ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 16, 12, 0),
+            child: SizedBox(
+              height: 140,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: List.generate(24, (hour) {
+                  // Build stacked segments per class
                   int hourTotal = 0;
+                  final segments = <MapEntry<String, int>>[];
                   for (final cls in classes) {
                     final classData = List<Map<String, dynamic>>.from(heatmap[cls] ?? []);
-                    if (hour < classData.length) {
-                      hourTotal += classData[hour]['count'] as int;
-                    }
+                    final count = hour < classData.length ? classData[hour]['count'] as int : 0;
+                    if (count > 0) segments.add(MapEntry(cls, count));
+                    hourTotal += count;
                   }
-                  final height = maxCount > 0 ? (hourTotal / maxCount) * 120 : 0.0;
+                  final barHeight = maxCount > 0 ? (hourTotal / maxCount) * 110 : 0.0;
                   final isNow = hour == DateTime.now().hour;
 
                   return Expanded(
                     child: GestureDetector(
                       onTap: hourTotal > 0 ? () => _showAlertsForHour(hour, null) : null,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Container(
-                            height: height.clamp(4, 120),
-                            margin: const EdgeInsets.symmetric(horizontal: 1),
-                            decoration: BoxDecoration(
-                              color: isNow ? Colors.amber : Colors.orange.withOpacity(0.6),
-                              borderRadius: BorderRadius.circular(3),
-                            ),
-                            child: hourTotal > 0
-                                ? Center(
-                                    child: Text(
-                                      '$hourTotal',
-                                      style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 1),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            // Count label
+                            if (hourTotal > 0)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 2),
+                                child: Text(
+                                  '$hourTotal',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    color: isNow ? Colors.amber.shade700 : theme.colorScheme.onSurfaceVariant,
+                                    fontWeight: isNow ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            // Stacked bar
+                            Container(
+                              height: barHeight.clamp(hourTotal > 0 ? 6 : 0, 110),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(3),
+                                border: isNow ? Border.all(color: Colors.amber, width: 1.5) : null,
+                              ),
+                              clipBehavior: Clip.hardEdge,
+                              child: Column(
+                                children: segments.map((seg) {
+                                  final segHeight = maxCount > 0
+                                      ? (seg.value / maxCount) * 110
+                                      : 0.0;
+                                  final color = _classColors[seg.key] ?? Colors.grey;
+                                  return Expanded(
+                                    flex: (seg.value * 100).clamp(1, 1000),
+                                    child: Container(
+                                      color: color.withOpacity(isNow ? 1.0 : 0.75),
                                     ),
-                                  )
-                                : null,
-                          ),
-                          if (hour % 3 == 0)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Text('${hour}h', style: const TextStyle(fontSize: 9)),
+                                  );
+                                }).toList(),
+                              ),
                             ),
-                        ],
+                            // Hour label
+                            if (hour % 3 == 0 || hour == DateTime.now().hour)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 3),
+                                child: Text(
+                                  '${hour}h',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: isNow ? FontWeight.bold : FontWeight.normal,
+                                    color: isNow ? Colors.amber.shade700 : theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   );
                 }),
               ),
             ),
-            const SizedBox(height: 8),
-            Text('Tap a bar to see screenshots', style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey)),
-            const SizedBox(height: 8),
-            ...classes.map((cls) {
-              final classData = List<Map<String, dynamic>>.from(heatmap[cls] ?? []);
-              final classTotal = classData.fold<int>(0, (sum, h) => sum + (h['count'] as int));
-              final color = _classColors[cls] ?? Colors.grey;
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
+          ),
+
+          // ── Legend ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              children: classes.map((cls) {
+                final color = _classColors[cls] ?? Colors.grey;
+                final count = classTotals[cls] ?? 0;
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(width: 10, height: 10, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+                    const SizedBox(width: 4),
+                    Text(cls, style: const TextStyle(fontSize: 11)),
+                    const SizedBox(width: 2),
+                    Text('$count', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color)),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+
+          // ── Per-class breakdown ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+            child: Text('By Class', style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: theme.colorScheme.onSurfaceVariant,
+            )),
+          ),
+          ...classes.map((cls) {
+            final classData = List<Map<String, dynamic>>.from(heatmap[cls] ?? []);
+            final classTotal = classData.fold<int>(0, (sum, h) => sum + (h['count'] as int));
+            final color = _classColors[cls] ?? Colors.grey;
+            final pct = total > 0 ? classTotal / total : 0.0;
+            // Peak hour
+            int peakHour = 0;
+            int peakCount = 0;
+            for (int i = 0; i < classData.length; i++) {
+              final c = classData[i]['count'] as int;
+              if (c > peakCount) { peakCount = c; peakHour = i; }
+            }
+            return InkWell(
+              onTap: classTotal > 0 ? () => _showAlertsForHour(peakHour, cls) : null,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
                 child: Row(
                   children: [
-                    Container(width: 12, height: 12, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+                    Container(width: 8, height: 8, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
                     const SizedBox(width: 8),
-                    Text(cls, style: const TextStyle(fontSize: 13)),
-                    const Spacer(),
-                    Text('$classTotal', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                    Text(cls, style: const TextStyle(fontSize: 12)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: pct,
+                          backgroundColor: color.withOpacity(0.12),
+                          valueColor: AlwaysStoppedAnimation(color.withOpacity(0.7)),
+                          minHeight: 6,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 32,
+                      child: Text('$classTotal', textAlign: TextAlign.right,
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+                    ),
+                    if (peakCount > 0) ...[
+                      const SizedBox(width: 4),
+                      Text('${peakHour}h', style: TextStyle(fontSize: 9, color: theme.colorScheme.onSurfaceVariant)),
+                    ],
                   ],
                 ),
-              );
-            }),
-          ],
-        ),
+              ),
+            );
+          }),
+          const SizedBox(height: 8),
+        ],
       ),
     );
   }

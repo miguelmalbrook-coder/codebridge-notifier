@@ -157,44 +157,38 @@ async def camera_snapshot(alias: str):
 
 
 @app.post("/api/cameras/{camera_id}/detect")
-async def detect_frame(camera_id: str, body: dict = {}):
+async def detect_frame(camera_id: str):
     """Run YOLO on-demand for AR mode. Returns annotated JPEG + detections list.
     
-    Body: {"targets": ["person", "car"]} — which classes to show.
+    Query param: targets=person,car (comma-separated classes to show).
     """
     from fastapi import HTTPException
     from fastapi.responses import Response
-    from src.auth import verify_token
-    from src.db import get_db
 
-    # Auth check
-    # (extract token from header manually for POST)
-    # For simplicity, this endpoint is semi-public like the snapshot endpoint
-    
-    # Resolve camera alias from ID
-    try:
-        db = get_db()
-        result = db.table("cameras").select("alias").eq("id", camera_id).execute()
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Camera not found")
-        alias = result.data[0]["alias"]
-    except HTTPException:
-        raise
-    except Exception:
+    # Resolve camera alias — use detector's cached configs (no DB hit)
+    alias = None
+    if _detector:
+        # Check if camera_id matches any cached camera's db_id
+        for cached_alias, cam_cfg in _detector._camera_configs.items():
+            if cam_cfg.db_id == camera_id:
+                alias = cached_alias
+                break
+    if alias is None:
         alias = camera_id  # Fallback: treat as alias directly
 
     if _detector is None:
         raise HTTPException(status_code=503, detail="Detector not running")
 
-    targets = body.get("targets", None)
-    result = _detector.detect_single(alias, targets=targets)
+    result = _detector.detect_single(alias, targets=None)  # Detect ALL classes
     if result is None:
         raise HTTPException(status_code=404, detail="No frame available")
 
+    # Build JPEG response with detections in header
+    det_json = json.dumps(result["detections"])
     return Response(
         content=result["image"],
         media_type="image/jpeg",
-        headers={"X-Detections": json.dumps(result["detections"])},
+        headers={"X-Detections": det_json},
     )
 
 
