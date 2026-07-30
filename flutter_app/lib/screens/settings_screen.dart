@@ -284,7 +284,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final camId = cam['id'] as String;
     final alias = cam['alias'] as String? ?? 'Unknown';
     final displayConf = (conf * 100).toStringAsFixed(0);
-
     final isOff = mode == 'off';
 
     return Card(
@@ -298,204 +297,146 @@ class _SettingsScreenState extends State<SettingsScreen> {
           fontWeight: FontWeight.w600,
           color: isOff ? Colors.grey : null,
         )),
-        subtitle: Text(isOff ? 'Detection OFF' : '$mode · ${displayConf}% · ${targets.join(", ")}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: isOff ? Colors.grey : null,
-            )),
+        subtitle: Text(
+          isOff ? 'Detection OFF' : '$mode\u00b7 ${displayConf}%\u00b7 ${targets.join(", ")}',
+          style: theme.textTheme.bodySmall?.copyWith(color: isOff ? Colors.grey : null),
+        ),
+        children: [_buildCameraSettings(cam, theme)],
+      ),
+    );
+  }
+
+  Widget _buildCameraSettings(Map<String, dynamic> cam, ThemeData theme) {
+    final mode = cam['detection_mode'] as String? ?? 'yolo';
+    final model = cam['model'] as String? ?? 'yolo11s.pt';
+    final conf = (cam['confidence'] as num?)?.toDouble() ?? 0.4;
+    final cooldown = (cam['cooldown_seconds'] as num?)?.toInt() ?? 15;
+    final targets = (cam['targets'] as List<dynamic>?)?.cast<String>() ?? ['person', 'car', 'cat', 'dog'];
+    final motionSensitivity = (cam['motion_sensitivity'] as num?)?.toDouble() ?? 0.001;
+    final camId = cam['id'] as String;
+    final isOff = mode == 'off';
+
+    final classConfs = Map<String, double>.from(
+      (cam['class_confidences'] as Map<dynamic, dynamic>?)
+              ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ?? {},
+    );
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Master toggle ──
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(isOff ? 'YOLO Detection: OFF' : 'YOLO Detection: ON',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: isOff ? Colors.red : Colors.green,
-                    )),
-                  subtitle: Text(isOff ? 'No detections will fire for this camera' : 'Detections active'),
-                  value: !isOff,
-                  onChanged: (v) {
-                    _saveCameraSetting(camId, 'detection_mode', v ? 'yolo' : 'off');
-                  },
-                ),
-                const Divider(),
-                const SizedBox(height: 8),
-
-                // Mode (only when ON)
-                if (!isOff) ...[
-                  _label('Detection Mode', theme),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment(value: 'yolo', label: Text('YOLO')),
-                      ButtonSegment(value: 'motion', label: Text('Motion')),
-                    ],
-                    selected: {mode},
-                    onSelectionChanged: (v) => _saveCameraSetting(camId, 'detection_mode', v.first),
-                  ),
-                ],
-                const SizedBox(height: 16),
-
-                // ── YOLO-specific settings (hidden when OFF) ──
-                if (!isOff) ...[
-                // Model
-                _label('YOLO Model', theme),
-                DropdownButtonFormField<String>(
-                  value: _availableModels.contains(model) ? model : _availableModels.firstOrNull,
-                  items: _availableModels.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
-                  onChanged: (v) { if (v != null) _saveCameraSetting(camId, 'model', v); },
-                  decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
-                ),
-                const SizedBox(height: 16),
-
-                // Cooldown
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _label('Cooldown', theme),
-                    Text('${cooldown}s', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                Slider(
-                  value: (_localSliderValues['${camId}_cooldown'] ?? cooldown.toDouble()),
-                  min: 1, max: 120, divisions: 119,
-                  onChanged: (v) {
-                    setState(() => _localSliderValues['${camId}_cooldown'] = v);
-                  },
-                  onChangeEnd: (v) {
-                    _localSliderValues.remove('${camId}_cooldown');
-                    _saveCameraSetting(camId, 'cooldown_seconds', v.round());
-                  },
-                ),
-
-                // Motion sensitivity (only relevant in motion mode)
-                if (mode == 'motion') ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _label('Motion Sensitivity', theme),
-                      Text('${(motionSensitivity * 100).toStringAsFixed(2)}%', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  Slider(
-                    value: (_localSliderValues['${camId}_motion'] ?? motionSensitivity),
-                    min: 0.0001, max: 0.01, divisions: 99,
-                    onChanged: (v) {
-                      setState(() => _localSliderValues['${camId}_motion'] = v);
-                    },
-                    onChangeEnd: (v) {
-                      _localSliderValues.remove('${camId}_motion');
-                      _saveCameraSetting(camId, 'motion_sensitivity', double.parse(v.toStringAsFixed(4)));
-                    },
-                  ),
-                  Text('Lower = more sensitive', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                  const SizedBox(height: 8),
-                ],
-
-                // Targets + Per-Class Confidence
-                const SizedBox(height: 12),
-                _label('Detection Targets & Confidence', theme),
-                const SizedBox(height: 8),
-
-                // Selected targets with confidence sliders
-                ..._availableTargets.where((t) => targets.contains(t)).map((t) {
-                  final classConfs = Map<String, double>.from(
-                    (cam['class_confidences'] as Map<dynamic, dynamic>?)
-                            ?.map((k, v) => MapEntry(k.toString(), (v as num).toDouble())) ??
-                        {},
-                  );
-                  final classConf = classConfs[t];
-                  final currentConf = classConf ?? conf;
-                  final pct = (currentConf * 100).round();
-
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Chip(
-                              label: Text(t, style: const TextStyle(fontSize: 13)),
-                              deleteIcon: const Icon(Icons.close, size: 16),
-                              onDeleted: () {
-                                final updated = List<String>.from(targets);
-                                updated.remove(t);
-                                final newConfs = Map<String, double>.from(classConfs);
-                                newConfs.remove(t);
-                                _saveCameraSetting(camId, 'class_confidences', newConfs);
-                                _saveCameraSetting(camId, 'targets', updated);
-                              },
-                              visualDensity: VisualDensity.compact,
-                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Slider(
-                                value: (_localSliderValues['${camId}_conf_$t'] ?? currentConf),
-                                min: 0.05,
-                                max: 0.95,
-                                divisions: 18,
-                                label: '${(_localSliderValues['${camId}_conf_$t'] ?? currentConf) * 100 ~/ 1}%',
-                                onChanged: (v) {
-                                  setState(() => _localSliderValues['${camId}_conf_$t'] = v);
-                                },
-                                onChangeEnd: (v) {
-                                  _localSliderValues.remove('${camId}_conf_$t');
-                                  final newConfs = Map<String, double>.from(classConfs);
-                                  newConfs[t] = double.parse(v.toStringAsFixed(2));
-                                  _saveCameraSetting(camId, 'class_confidences', newConfs);
-                                },
-                              ),
-                            ),
-                            SizedBox(
-                              width: 36,
-                              child: Text(
-                                '${((_localSliderValues['${camId}_conf_$t'] ?? currentConf) * 100).round()}%',
-                                textAlign: TextAlign.right,
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.primary,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-
-                // Unselected targets (add via chips)
-                if (_availableTargets.any((t) => !targets.contains(t))) ...[
-                  const SizedBox(height: 4),
-                  const Divider(height: 1),
-                  const SizedBox(height: 8),
-                  Text('Add target:', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: _availableTargets.where((t) => !targets.contains(t)).map((t) {
-                      return FilterChip(
-                        label: Text(t, style: const TextStyle(fontSize: 12)),
-                        selected: false,
-                        onSelected: (_) {
-                          final updated = List<String>.from(targets);
-                          updated.add(t);
-                          _saveCameraSetting(camId, 'targets', updated);
-                        },
-                        visualDensity: VisualDensity.compact,
-                      );
-                    }).toList(),
-                  ),
-                ], // end if (!isOff)
-              ],
-            ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: Text(isOff ? 'YOLO Detection: OFF' : 'YOLO Detection: ON',
+              style: TextStyle(fontWeight: FontWeight.w600, color: isOff ? Colors.red : Colors.green)),
+            subtitle: Text(isOff ? 'No detections will fire for this camera' : 'Detections active'),
+            value: !isOff,
+            onChanged: (v) => _saveCameraSetting(camId, 'detection_mode', v ? 'yolo' : 'off'),
           ),
+          const Divider(),
+          const SizedBox(height: 8),
+          if (!isOff) ...[
+            _label('Detection Mode', theme),
+            SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'yolo', label: Text('YOLO')),
+                ButtonSegment(value: 'motion', label: Text('Motion')),
+              ],
+              selected: {mode},
+              onSelectionChanged: (v) => _saveCameraSetting(camId, 'detection_mode', v.first),
+            ),
+            const SizedBox(height: 16),
+            _label('YOLO Model', theme),
+            DropdownButtonFormField<String>(
+              value: _availableModels.contains(model) ? model : _availableModels.firstOrNull,
+              items: _availableModels.map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
+              onChanged: (v) { if (v != null) _saveCameraSetting(camId, 'model', v); },
+              decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12)),
+            ),
+            const SizedBox(height: 16),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              _label('Cooldown', theme),
+              Text('${cooldown}s', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
+            ]),
+            Slider(
+              value: (_localSliderValues['${camId}_cooldown'] ?? cooldown.toDouble()),
+              min: 1, max: 120, divisions: 119,
+              onChanged: (v) => setState(() => _localSliderValues['${camId}_cooldown'] = v),
+              onChangeEnd: (v) { _localSliderValues.remove('${camId}_cooldown'); _saveCameraSetting(camId, 'cooldown_seconds', v.round()); },
+            ),
+            if (mode == 'motion') ...[
+              const SizedBox(height: 8),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                _label('Motion Sensitivity', theme),
+                Text('${(motionSensitivity * 100).toStringAsFixed(2)}%', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
+              ]),
+              Slider(
+                value: (_localSliderValues['${camId}_motion'] ?? motionSensitivity),
+                min: 0.0001, max: 0.01, divisions: 99,
+                onChanged: (v) => setState(() => _localSliderValues['${camId}_motion'] = v),
+                onChangeEnd: (v) { _localSliderValues.remove('${camId}_motion'); _saveCameraSetting(camId, 'motion_sensitivity', double.parse(v.toStringAsFixed(4))); },
+              ),
+              Text('Lower = more sensitive', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              const SizedBox(height: 8),
+            ],
+            const SizedBox(height: 12),
+            _label('Detection Targets & Confidence', theme),
+            const SizedBox(height: 8),
+            ..._availableTargets.where((t) => targets.contains(t)).map((t) {
+              final classConf = classConfs[t];
+              final currentConf = classConf ?? conf;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(children: [
+                  Chip(
+                    label: Text(t, style: const TextStyle(fontSize: 13)),
+                    deleteIcon: const Icon(Icons.close, size: 16),
+                    onDeleted: () {
+                      final updated = List<String>.from(targets)..remove(t);
+                      final newConfs = Map<String, double>.from(classConfs)..remove(t);
+                      _saveCameraSetting(camId, 'class_confidences', newConfs);
+                      _saveCameraSetting(camId, 'targets', updated);
+                    },
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: Slider(
+                    value: (_localSliderValues['${camId}_conf_$t'] ?? currentConf),
+                    min: 0.05, max: 0.95, divisions: 18,
+                    onChanged: (v) => setState(() => _localSliderValues['${camId}_conf_$t'] = v),
+                    onChangeEnd: (v) {
+                      _localSliderValues.remove('${camId}_conf_$t');
+                      final newConfs = Map<String, double>.from(classConfs);
+                      newConfs[t] = double.parse(v.toStringAsFixed(2));
+                      _saveCameraSetting(camId, 'class_confidences', newConfs);
+                    },
+                  )),
+                  SizedBox(width: 36, child: Text(
+                    '${((_localSliderValues['${camId}_conf_$t'] ?? currentConf) * 100).round()}%',
+                    textAlign: TextAlign.right,
+                    style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold),
+                  )),
+                ]),
+              );
+            }),
+          ],
+          if (!isOff && _availableTargets.any((t) => !targets.contains(t))) ...[
+            const SizedBox(height: 4),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            Text('Add target:', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 4),
+            Wrap(spacing: 6, runSpacing: 4, children: _availableTargets.where((t) => !targets.contains(t)).map((t) {
+              return FilterChip(
+                label: Text(t, style: const TextStyle(fontSize: 12)),
+                selected: false,
+                onSelected: (_) => _saveCameraSetting(camId, 'targets', [...targets, t]),
+                visualDensity: VisualDensity.compact,
+              );
+            }).toList()),
+          ],
         ],
       ),
     );
