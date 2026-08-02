@@ -157,18 +157,22 @@ async def camera_snapshot(alias: str):
 
 
 @app.get("/api/cameras/{camera_id}/detect")
-async def detect_frame(camera_id: str):
+async def detect_frame(camera_id: str, model: str = "yolo11n.pt"):
     """Run YOLO on-demand for AR mode. Returns annotated JPEG + detections list.
     
-    Query param: targets=person,car (comma-separated classes to show).
+    Query params:
+        model: YOLO model name (yolo11n.pt, yolo11s.pt, etc.)
+        targets: comma-separated classes to show (optional, filters client-side)
     """
-    from fastapi import HTTPException
+    from fastapi import HTTPException, Query
     from fastapi.responses import Response
+    from src.services.ar_detector import ARDetector
 
-    # Resolve camera alias — use detector's cached configs (no DB hit)
+    ar = ARDetector.get_instance()
+
+    # Resolve camera alias — use main detector's cached configs
     alias = None
     if _detector:
-        # Check if camera_id matches any cached camera's db_id
         for cached_alias, cam_cfg in _detector._camera_configs.items():
             if cam_cfg.db_id == camera_id:
                 alias = cached_alias
@@ -179,9 +183,23 @@ async def detect_frame(camera_id: str):
     if _detector is None:
         raise HTTPException(status_code=503, detail="Detector not running")
 
-    result = _detector.detect_single(alias, targets=None)  # Detect ALL classes
-    if result is None:
+    # Get latest frame from main detector
+    frame = _detector.latest_frames.get(alias)
+    if frame is None:
         raise HTTPException(status_code=404, detail="No frame available")
+
+    # Load AR model if needed (with progress tracking)
+    if ar.status != "ready" or ar.current_model != model:
+        try:
+            ar.load_model(model)
+        except Exception as e:
+            log.error("AR model load failed: %s", e)
+            raise HTTPException(status_code=503, detail=f"Model load failed: {e}")
+
+    # Run AR detection
+    result = ar.detect(frame)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Detection failed")
 
     # Build JPEG response with detections in header
     det_json = json.dumps(result["detections"])

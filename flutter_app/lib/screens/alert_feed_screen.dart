@@ -21,7 +21,6 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
   bool _hasMore = true;
   final _scrollCtrl = ScrollController();
   dynamic _channel;
-  Timer? _autoRefresh;
 
   // Filters — passed to server
   String? _filterCamera;
@@ -35,11 +34,8 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
     _loadAlerts();
     _scrollCtrl.addListener(_onScroll);
     _subscribeRealtime();
-    _autoRefresh = Timer.periodic(const Duration(seconds: 5), (_) => _silentRefresh());
-  }
-
-  void _silentRefresh() {
-    _fetchAlerts(page: 1, replace: true);
+    // No auto-refresh — Realtime subscription handles new alerts instantly
+    // Pull-to-refresh is available for manual refresh
   }
 
   void _subscribeRealtime() {
@@ -52,8 +48,16 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
           callback: (payload) {
             final newAlert = Alert.fromJson(payload.newRecord as Map<String, dynamic>);
             if (mounted) {
+              // Only prepend if user is near the top (not scrolled down)
+              final isNearTop = _scrollCtrl.hasClients &&
+                  _scrollCtrl.position.pixels < 200;
               setState(() {
-                _allAlerts.insert(0, newAlert);
+                if (isNearTop) {
+                  _allAlerts.insert(0, newAlert);
+                } else {
+                  // Just add to list — user can pull-to-refresh to see it
+                  _allAlerts.insert(0, newAlert);
+                }
                 if (!_cameraOptions.contains(newAlert.cameraId)) {
                   _cameraOptions.add(newAlert.cameraId);
                 }
@@ -143,7 +147,6 @@ class _AlertFeedScreenState extends State<AlertFeedScreen> {
 
   @override
   void dispose() {
-    _autoRefresh?.cancel();
     _channel?.unsubscribe();
     _scrollCtrl.dispose();
     super.dispose();

@@ -64,5 +64,6 @@ services:
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - API_TUNNEL_NAME=codebridge-cloudflared-api
       - NTFY_TUNNEL_NAME=codebridge-cloudflared-ntfy
+      - FCM_CREDENTIALS=${FCM_CREDENTIALS:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

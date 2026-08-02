@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-RUN pip install httpx docker
+RUN pip install httpx docker pyjwt cryptography
 
 COPY scripts/tunnel-watchdog.py /watchdog.py
 

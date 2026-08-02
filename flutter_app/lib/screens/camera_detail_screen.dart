@@ -32,9 +32,31 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
   Uint8List? _arFrame;
   List<Map<String, dynamic>> _arDetections = [];
   bool _arLoading = false;
+  bool _arModelLoading = false;
+  double _arModelProgress = 0.0;
+  String _arSelectedModel = 'yolo11n.pt';
   Set<String> _arTargets = {'person', 'car', 'cat', 'dog'};
 
-  static const _allClasses = ['person', 'car', 'cat', 'dog', 'truck', 'bus', 'motorcycle', 'bicycle'];
+  static const _allClasses = [
+    // People & Vehicles
+    'person', 'car', 'truck', 'bus', 'motorcycle', 'bicycle',
+    // Animals
+    'cat', 'dog', 'bird', 'horse', 'sheep', 'cow', 'bear', 'elephant',
+    // Nature & Outdoor
+    'potted plant', 'bench', 'umbrella',
+    // Objects
+    'handbag', 'suitcase', 'bottle', 'cup', 'laptop', 'cell phone',
+    'tv', 'book', 'clock', 'scissors',
+  ];
+
+  static const _arModels = [
+    {'name': 'yolo11n.pt', 'label': 'Nano (Fast)', 'desc': 'Fastest, least accurate'},
+    {'name': 'yolo11s.pt', 'label': 'Small', 'desc': 'Good balance'},
+    {'name': 'yolo11m.pt', 'label': 'Medium', 'desc': 'Better accuracy'},
+    {'name': 'yolo11l.pt', 'label': 'Large', 'desc': 'High accuracy'},
+    {'name': 'yolo11x.pt', 'label': 'XLarge', 'desc': 'Best accuracy, slowest'},
+  ];
+
   static const _classColors = {
     'person': Colors.blue,
     'car': Colors.orange,
@@ -44,6 +66,25 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     'bus': Colors.teal,
     'motorcycle': Colors.pink,
     'bicycle': Colors.indigo,
+    'bird': Colors.lightBlue,
+    'horse': Colors.brown,
+    'sheep': Colors.grey,
+    'cow': Colors.amber,
+    'bear': Colors.deepOrange,
+    'elephant': Colors.blueGrey,
+    'potted plant': Colors.green,
+    'bench': Colors.brown,
+    'umbrella': Colors.cyan,
+    'handbag': Colors.pink,
+    'suitcase': Colors.indigo,
+    'bottle': Colors.teal,
+    'cup': Colors.orange,
+    'laptop': Colors.grey,
+    'cell phone': Colors.blue,
+    'tv': Colors.black,
+    'book': Colors.red,
+    'clock': Colors.amber,
+    'scissors': Colors.blueGrey,
   };
 
   String? get _sessionToken => supabase.auth.currentSession?.accessToken;
@@ -71,12 +112,14 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
   void _startArSession() {
     _arOverlay = true;
     _arLoading = true;
+    _arModelLoading = true;
+    _arModelProgress = 0.0;
     _arFrame = null;
     _arDetections = [];
     _arBusy = false;
     setState(() {});
+    // Start polling — first frame will show loading, then model loads
     _pollArFrame();
-    // Poll every 2s — detect takes ~1.5s, no need to stack up
     _arPollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollArFrame());
   }
 
@@ -94,10 +137,10 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     if (!_arOverlay || !mounted || _arBusy) return;
     _arBusy = true;
     try {
-      final url = '$_backendUrl/api/cameras/${widget.cameraId}/detect';
+      final url = '$_backendUrl/api/cameras/${widget.cameraId}/detect?model=$_arSelectedModel';
       final resp = await http.get(
         Uri.parse(url),
-      ).timeout(const Duration(seconds: 8));
+      ).timeout(const Duration(seconds: 15));
 
       if (resp.statusCode == 200 && mounted) {
         // Parse detections from header
@@ -113,14 +156,22 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
           _arFrame = resp.bodyBytes;
           _arDetections = filtered;
           _arLoading = false;
+          _arModelLoading = false;
+          _arModelProgress = 1.0;
         });
       } else if (mounted && resp.statusCode == 404) {
         // No frame yet — keep loading
         setState(() => _arLoading = true);
+      } else if (mounted && resp.statusCode == 503) {
+        // Model loading — show progress
+        final body = jsonDecode(resp.body);
+        setState(() {
+          _arModelLoading = true;
+          _arModelProgress = (body['progress'] as num?)?.toDouble() ?? 0.0;
+        });
       }
     } catch (e) {
       debugPrint('AR poll error: $e');
-      // Keep showing existing frame if we have one, just retry next tick
     } finally {
       _arBusy = false;
     }
@@ -293,13 +344,36 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
 
   Widget _buildArView(ThemeData theme) {
     if (_arLoading && _arFrame == null) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            CircularProgressIndicator(color: Colors.amber),
-            SizedBox(height: 12),
-            Text('Starting AR detection...', style: TextStyle(color: Colors.amber)),
+            if (_arModelLoading) ...[
+              SizedBox(
+                width: 200,
+                child: LinearProgressIndicator(
+                  value: _arModelProgress > 0 ? _arModelProgress : null,
+                  backgroundColor: Colors.amber.withOpacity(0.2),
+                  valueColor: const AlwaysStoppedAnimation(Colors.amber),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _arModelProgress > 0
+                    ? 'Loading YOLO model... ${(_arModelProgress * 100).toInt()}%'
+                    : 'Loading YOLO model...',
+                style: const TextStyle(color: Colors.amber),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _arModels.firstWhere((m) => m['name'] == _arSelectedModel)['label']!,
+                style: TextStyle(color: Colors.amber.withOpacity(0.6), fontSize: 12),
+              ),
+            ] else ...[
+              const CircularProgressIndicator(color: Colors.amber),
+              const SizedBox(height: 12),
+              const Text('Starting AR detection...', style: TextStyle(color: Colors.amber)),
+            ],
           ],
         ),
       );
@@ -309,7 +383,7 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
       return Image.memory(
         _arFrame!,
         fit: BoxFit.cover,
-        gaplessPlayback: true, // Prevents flicker between frames
+        gaplessPlayback: true,
       );
     }
 
@@ -339,6 +413,51 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Model selector
+          Row(
+            children: [
+              Icon(Icons.speed, size: 14, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 4),
+              Text('Model:', style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+              )),
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButton<String>(
+                  value: _arSelectedModel,
+                  isDense: true,
+                  underline: const SizedBox(),
+                  style: theme.textTheme.bodySmall,
+                  items: _arModels.map((m) => DropdownMenuItem(
+                    value: m['name'],
+                    child: Text('${m['label']}', style: const TextStyle(fontSize: 12)),
+                  )).toList(),
+                  onChanged: (v) {
+                    if (v != null) {
+                      setState(() => _arSelectedModel = v);
+                      // Restart AR with new model
+                      _stopArSession();
+                      _startArSession();
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Model loading progress
+          if (_arModelLoading && _arModelProgress > 0)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: LinearProgressIndicator(
+                value: _arModelProgress,
+                backgroundColor: Colors.amber.withOpacity(0.2),
+                valueColor: const AlwaysStoppedAnimation(Colors.amber),
+                minHeight: 3,
+              ),
+            ),
+          // Detection classes
           Text(
             'Detection Classes',
             style: theme.textTheme.labelSmall?.copyWith(
@@ -355,7 +474,7 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
               final color = _classColors[cls] ?? Colors.grey;
               return FilterChip(
                 label: Text(cls, style: TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   color: isActive ? Colors.white : color,
                   fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
                 )),
@@ -365,7 +484,7 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
                 checkmarkColor: Colors.white,
                 avatar: isActive
                     ? null
-                    : Icon(_iconForClass(cls), size: 16, color: color),
+                    : Icon(_iconForClass(cls), size: 14, color: color),
                 visualDensity: VisualDensity.compact,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               );
@@ -385,11 +504,23 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     switch (cls) {
       case 'person': return Icons.person;
       case 'car': return Icons.directions_car;
-      case 'cat': case 'dog': return Icons.pets;
+      case 'cat': case 'dog': case 'bird': case 'horse': case 'sheep':
+      case 'cow': case 'bear': case 'elephant': return Icons.pets;
       case 'truck': return Icons.local_shipping;
       case 'bus': return Icons.directions_bus;
       case 'motorcycle': return Icons.two_wheeler;
       case 'bicycle': return Icons.pedal_bike;
+      case 'potted plant': return Icons.grass;
+      case 'bench': return Icons.chair;
+      case 'umbrella': return Icons.umbrella;
+      case 'handbag': case 'suitcase': return Icons.work;
+      case 'bottle': case 'cup': return Icons.local_drink;
+      case 'laptop': return Icons.laptop;
+      case 'cell phone': return Icons.phone;
+      case 'tv': return Icons.tv;
+      case 'book': return Icons.book;
+      case 'clock': return Icons.access_time;
+      case 'scissors': return Icons.content_cut;
       default: return Icons.help_outline;
     }
   }
