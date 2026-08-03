@@ -137,7 +137,8 @@ class _CameraDetailScreenState extends State<CameraDetailScreen> {
     if (!_arOverlay || !mounted || _arBusy) return;
     _arBusy = true;
     try {
-      final url = '$_backendUrl/api/cameras/${widget.cameraId}/detect?model=$_arSelectedModel';
+      final token = _sessionToken ?? '';
+      final url = '$_backendUrl/api/cameras/${widget.cameraId}/detect?model=$_arSelectedModel&token=$token';
       final resp = await http.get(
         Uri.parse(url),
       ).timeout(const Duration(seconds: 15));

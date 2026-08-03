@@ -19,8 +19,8 @@ AVAILABLE_MODELS = [
 
 
 @router.get("/settings")
-async def get_settings():
-    """Get current runtime settings. No auth required."""
+async def get_settings(user: dict = Depends(verify_token)):
+    """Get current runtime settings. Requires auth."""
     s = get_runtime_settings()
     return {
         **s.as_dict(),

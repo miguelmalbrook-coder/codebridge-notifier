@@ -7,12 +7,13 @@ import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 import cv2
 
 from src.config import settings as config
+from src.auth import verify_token
 
 logging.basicConfig(
     level=getattr(logging, config.log_level.upper(), logging.INFO),
@@ -108,14 +109,14 @@ async def get_config():
 
 
 @app.get("/api/monitoring/status")
-async def monitoring_status():
-    """Check if monitoring (YOLO detection) is active or paused."""
+async def monitoring_status(user: dict = Depends(verify_token)):
+    """Check if monitoring (YOLO detection) active or paused."""
     paused = _detector.is_paused if _detector else True
     return {"paused": paused}
 
 
 @app.post("/api/monitoring/pause")
-async def monitoring_pause():
+async def monitoring_pause(user: dict = Depends(verify_token)):
     """Pause YOLO detection (keeps server running, stops alerting)."""
     if _detector is None:
         from fastapi import HTTPException
@@ -125,7 +126,7 @@ async def monitoring_pause():
 
 
 @app.post("/api/monitoring/resume")
-async def monitoring_resume():
+async def monitoring_resume(user: dict = Depends(verify_token)):
     """Resume YOLO detection after pause."""
     if _detector is None:
         from fastapi import HTTPException
@@ -135,13 +136,19 @@ async def monitoring_resume():
 
 
 @app.get("/api/cameras/{alias}/snapshot")
-async def camera_snapshot(alias: str):
+async def camera_snapshot(alias: str, token: str | None = Query(None)):
     """Get the latest frame from a camera as a JPEG image.
     
-    NOTE: This endpoint is intentionally public for live-view in the app.
-    The try.cloudflare.com URL rotates on restart, providing ephemeral security.
+    Requires auth via Authorization header or ?token= query param.
     """
     from fastapi.responses import Response
+
+    # Verify auth
+    try:
+        verify_token(authorization="", token=token)
+    except Exception:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     if _detector is None or alias not in _detector.latest_frames:
         from fastapi import HTTPException
@@ -157,16 +164,23 @@ async def camera_snapshot(alias: str):
 
 
 @app.get("/api/cameras/{camera_id}/detect")
-async def detect_frame(camera_id: str, model: str = "yolo11n.pt"):
+async def detect_frame(camera_id: str, model: str = "yolo11n.pt", token: str | None = Query(None)):
     """Run YOLO on-demand for AR mode. Returns annotated JPEG + detections list.
     
     Query params:
         model: YOLO model name (yolo11n.pt, yolo11s.pt, etc.)
         targets: comma-separated classes to show (optional, filters client-side)
+        token: auth token (for Image.network which can't set headers)
     """
-    from fastapi import HTTPException, Query
+    from fastapi import HTTPException
     from fastapi.responses import Response
     from src.services.ar_detector import ARDetector
+
+    # Verify auth
+    try:
+        verify_token(authorization="", token=token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     ar = ARDetector.get_instance()
 

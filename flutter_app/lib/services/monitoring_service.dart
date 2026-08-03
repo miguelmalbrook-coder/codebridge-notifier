@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
+import '../supabase/client.dart';
 
 /// Singleton service that tracks whether YOLO monitoring is active or paused.
 /// Polls the backend every 10 seconds and exposes a ValueNotifier for UI.
@@ -17,6 +18,8 @@ class MonitoringService {
   Timer? _pollTimer;
 
   bool get isMonitoring => isActive.value;
+
+  String? get _token => supabase.auth.currentSession?.accessToken;
 
   /// Start polling monitoring status.
   void startPolling() {
@@ -35,8 +38,10 @@ class MonitoringService {
 
   Future<void> _check() async {
     try {
+      final token = _token;
+      if (token == null) return;
       final resp = await http.get(
-        Uri.parse('${BackendConfig.baseUrl}/api/monitoring/status'),
+        Uri.parse('${BackendConfig.baseUrl}/api/monitoring/status?token=$token'),
       ).timeout(const Duration(seconds: 5));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body);
@@ -51,8 +56,10 @@ class MonitoringService {
   /// Pause monitoring.
   Future<bool> pause() async {
     try {
+      final token = _token;
+      if (token == null) return false;
       final resp = await http.post(
-        Uri.parse('${BackendConfig.baseUrl}/api/monitoring/pause'),
+        Uri.parse('${BackendConfig.baseUrl}/api/monitoring/pause?token=$token'),
       ).timeout(const Duration(seconds: 5));
       if (resp.statusCode == 200) {
         isActive.value = false;
@@ -65,8 +72,10 @@ class MonitoringService {
   /// Resume monitoring.
   Future<bool> resume() async {
     try {
+      final token = _token;
+      if (token == null) return false;
       final resp = await http.post(
-        Uri.parse('${BackendConfig.baseUrl}/api/monitoring/resume'),
+        Uri.parse('${BackendConfig.baseUrl}/api/monitoring/resume?token=$token'),
       ).timeout(const Duration(seconds: 5));
       if (resp.statusCode == 200) {
         isActive.value = true;
