@@ -73,8 +73,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadMeta() async {
     try {
-      final res = await http.get(Uri.parse('${BackendConfig.baseUrl}/api/settings'))
-          .timeout(const Duration(seconds: 8));
+      final token = supabase.auth.currentSession?.accessToken ?? '';
+      final res = await http.get(
+        Uri.parse('${BackendConfig.baseUrl}/api/settings?token=$token'),
+      ).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200 && mounted) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         setState(() {
